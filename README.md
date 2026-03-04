@@ -6,9 +6,6 @@ This repository contains an ESP-IDF firmware project for **ESP32-S3** that:
 2. Parses each device’s **HID report descriptor** to discover supported axes / hat / buttons.
 3. Decodes incoming **raw HID input reports** into a normalized `GamepadState`.
 4. Publishes the merged state as a **BLE HID Gamepad (HOGP)** using **NimBLE**.
-
-> **Important:** This README is derived strictly from the current code in this repository. Where the code does not specify a detail (e.g., exact wiring for your specific dev board), you’ll see a **TODO** placeholder instead of a guess.
-
 ---
 
 ## Features
