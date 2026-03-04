@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# ESP-IDF build output
+build/
+
+# Generated project config
+sdkconfig
+sdkconfig.old
+sdkconfig.*.old
+
+# Component manager
+managed_components/
+components/managed_components/
+.idf-component-manager/
+
+# Editor
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
