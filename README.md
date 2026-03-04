@@ -1,4 +1,4 @@
-# HOTAS USB → BLE Gamepad Bridge (ESP32-S3 / ESP-IDF)
+# HOTAS USB → BLE Gamepad Bridge <br>(ESP32-S3 / ESP-IDF)</br>
 
 This repository contains an ESP-IDF firmware project for **ESP32-S3** that:
 
