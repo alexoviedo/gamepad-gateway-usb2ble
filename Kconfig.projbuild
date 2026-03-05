@@ -1,0 +1,18 @@
+menu "Gamepad Gateway"
+
+    config VERBOSE_HID_DEBUG
+        bool "Verbose HID debug instrumentation"
+        default n
+        help
+            Enables targeted instrumentation used to debug HID report decoding
+            and multi-device merge behavior (e.g., the rudder axis issue).
+
+            When enabled, the firmware will:
+              - Dump a descriptor snapshot once per device connect
+              - Track per-device report cadence and last report metadata
+              - Print per-device decoded state before merging
+              - Print per-axis merge "winner" device and collisions
+
+            Keep this OFF for release builds to reduce log noise and overhead.
+
+endmenu

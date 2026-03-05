@@ -240,3 +240,94 @@ By default, it performs an **identity mapping** (no remaps / deadzones / inversi
 * Input report buffer in the HID callback is **128 bytes**.
 * Up to **8** HID devices can be tracked at once (`MAX_DEVICES`).
 * The `debug_portal.*` module exists in the repository but is **not compiled** (not included in `main/CMakeLists.txt`) and is **not started** by `app_main()`.
+
+---
+
+## Debugging the Rudder Issue
+
+This repo includes **Phase 0** instrumentation designed to answer one question:
+
+> Is rudder being decoded correctly per-device but lost during merge/mapping (A),
+> or decoded inconsistently at the input extraction layer (B)?
+
+### 1) Enable verbose HID instrumentation
+
+The instrumentation is gated behind a **compile-time** flag so release builds stay clean.
+
+Enable it via menuconfig:
+
+```bash
+idf.py menuconfig
+```
+
+Then:
+
+* **Gamepad Gateway → Verbose HID debug instrumentation** → **Enable**
+
+Alternatively (no menuconfig), you can inject a compiler define:
+
+```bash
+idf.py -DCMAKE_C_FLAGS="-DGPG_VERBOSE_HID_DEBUG=1" -DCMAKE_CXX_FLAGS="-DGPG_VERBOSE_HID_DEBUG=1" build
+```
+
+(If you already have a build directory, do a clean build so flags take effect: `idf.py fullclean`.)
+
+### 2) Build / flash / monitor
+
+```bash
+idf.py -p <PORT> flash monitor
+```
+
+### 3) What you should see (with stick + throttle + pedals attached)
+
+#### A) Descriptor snapshot (printed once per device connect)
+
+On each HID device connection, you should see a block like:
+
+* `Descriptor snapshot DEV[slot] addr=... VID=... PID=... iface=... role=... fields=...`
+* Followed by `IN elem:` lines (usage_page, usage, report_id, bit offsets/sizes, logical min/max)
+
+This confirms how the firmware **thinks** the device’s input report is structured.
+
+#### B) Per-device decoded state (BEFORE merging)
+
+While moving controls, you should see periodic lines like:
+
+* `DEV[slot] ... rpt_id=.. len=.. hz~..  x=.. y=.. z=.. rx=.. ry=.. rz=.. s1=.. s2=.. hat=.. buttons=..`
+
+With the latest Phase 0 instrumentation, you will also see (rate-limited with the device dump):
+
+* `DEV[slot] raw[16]: .. .. .. .. ...` (first 16 bytes of the most recent raw report)
+* `DEV[slot] Zsrc ... bytes[..]=.. .. raw=0x....` (the raw bytes backing the Z/Rudder element)
+* `DEV[slot] NOTE: Z ... appears stuck at max; rudder may be on Slider` (printed once if Z looks invalid/stuck)
+* `DEV[slot] RUDDER_CANDIDATE: Slider (0x01/0x36) ...` (printed when the slider raw value changes)
+
+This is the critical proof for **(A) vs (B)**.
+
+#### C) Merge diagnostics (winner per axis + collisions)
+
+You should also see periodic lines like:
+
+* `MERGE winners: X=dev? Y=dev? Z=dev? Rx=dev? ...`
+* `MERGE out: x=.. y=.. z=.. ...`
+* Optional warnings: `MERGE collision: Z has N active contributors`
+
+This tells you exactly **which device “won” each axis** in the final merged output.
+
+### 4) How to interpret results
+
+**If pedals’ device line shows Z moving smoothly** (rudder deflection changes), but:
+
+* `MERGE out: z=...` does **not** track it, or
+* `MERGE winners: Z=devX` is consistently **not** the pedals device,
+
+…then the bug is likely **(A) merge/mapping**.
+
+**If pedals’ device line shows Z updating inconsistently / intermittently**, or you see:
+
+* `AXIS COLLISION Z overwritten (....)` warnings
+
+…then the bug is likely **(B) input extraction / descriptor mapping**, especially cases where
+multiple usages map into the same internal axis (e.g., Generic Desktop Z and Simulation Rudder both
+writing to `state.z`).
+

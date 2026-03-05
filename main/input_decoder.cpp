@@ -1,6 +1,12 @@
 #include "input_decoder.h"
+#include "hid_verbose.h"
 #include <stdlib.h>
 #include <string.h>
+
+#if HID_VERBOSE_HID_DEBUG
+#include <esp_log.h>
+static const char *TAG_DECODE = "HID_DECODE";
+#endif
 
 // helper to extract little-endian bits spanning across bytes
 static int32_t extract_bits(const uint8_t *report, size_t report_size,
@@ -81,6 +87,40 @@ void hid_decode_report(const uint8_t *report, size_t report_size,
     payload_len = report_size - 1;
   }
 
+#if HID_VERBOSE_HID_DEBUG
+  // Track "multiple usages mapped to the same internal axis" within ONE decoded report.
+  // This is critical for diagnosing cases like Generic Desktop Z (0x01/0x32) and
+  // Simulation Rudder (0x02/0xBA) both writing into ctx->state.z.
+  struct AxisWriteInfo {
+    bool written;
+    uint16_t usage_page;
+    uint16_t usage;
+  };
+  AxisWriteInfo w_x{false, 0, 0}, w_y{false, 0, 0}, w_z{false, 0, 0}, w_rx{false, 0, 0},
+      w_ry{false, 0, 0}, w_rz{false, 0, 0}, w_s1{false, 0, 0}, w_s2{false, 0, 0},
+      w_hat{false, 0, 0};
+
+  auto note_axis_write = [&](const char *axis, AxisWriteInfo &w, uint16_t up,
+                             uint16_t u) {
+    if (!w.written) {
+      w.written = true;
+      w.usage_page = up;
+      w.usage = u;
+      return;
+    }
+    // Same usage writing again is noise; only log when a different usage overwrites.
+    if (w.usage_page != up || w.usage != u) {
+      ESP_LOGW(TAG_DECODE,
+               "DEV[%u] addr=%u report_id=%u: AXIS COLLISION %s overwritten (%04X/%04X -> %04X/%04X)",
+               (unsigned)ctx->slot_id, (unsigned)ctx->usb_addr, (unsigned)report_id,
+               axis, (unsigned)w.usage_page, (unsigned)w.usage, (unsigned)up,
+               (unsigned)u);
+      w.usage_page = up;
+      w.usage = u;
+    }
+  };
+#endif
+
   // Clear transient button state
   ctx->state.buttons = 0;
 
@@ -94,24 +134,70 @@ void hid_decode_report(const uint8_t *report, size_t report_size,
 
     if (f.usage_page == 0x01) { // Desktop
       if (f.usage == 0x30)
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("X", w_x, f.usage_page, f.usage);
+#endif
         ctx->state.x = normalize_axis(raw_val, f.logical_min, f.logical_max);
+      }
       else if (f.usage == 0x31)
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("Y", w_y, f.usage_page, f.usage);
+#endif
         ctx->state.y = normalize_axis(raw_val, f.logical_min, f.logical_max);
+      }
       else if (f.usage == 0x32)
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("Z", w_z, f.usage_page, f.usage);
+#endif
         ctx->state.z = normalize_axis(raw_val, f.logical_min, f.logical_max);
+      }
       else if (f.usage == 0x33)
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("Rx", w_rx, f.usage_page, f.usage);
+#endif
         ctx->state.rx = normalize_axis(raw_val, f.logical_min, f.logical_max);
+      }
       else if (f.usage == 0x34)
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("Ry", w_ry, f.usage_page, f.usage);
+#endif
         ctx->state.ry = normalize_axis(raw_val, f.logical_min, f.logical_max);
+      }
       else if (f.usage == 0x35)
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("Rz", w_rz, f.usage_page, f.usage);
+#endif
         ctx->state.rz = normalize_axis(raw_val, f.logical_min, f.logical_max);
+      }
       else if (f.usage == 0x36)
-        ctx->state.slider1 =
-            normalize_axis(raw_val, f.logical_min, f.logical_max);
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("Slider1", w_s1, f.usage_page, f.usage);
+#endif
+	      const int16_t v = normalize_axis(raw_val, f.logical_min, f.logical_max);
+	      ctx->state.slider1 = v;
+
+	      // Quirk: For Thrustmaster composite throttle/pedals (VID:PID 044F:B687),
+	      // we've observed the physical rudder deflection come in on Slider1 (0x36)
+	      // while Generic Desktop Z (0x32) may appear stuck at max.
+	      // Mirror Slider1 into Rz so the BLE gamepad exposes a usable "Z Rotation" axis.
+	      if (ctx->vid == 0x044F && ctx->pid == 0xB687 && report_id == 1) {
+	        ctx->state.rz = v;
+	      }
+      }
       else if (f.usage == 0x39) { // Hat
         if (raw_val >= f.logical_min && raw_val <= f.logical_max) {
           // Usually 8-way hat starts at 0 = N, 1=NE, etc
           int normalized_hat = (raw_val - f.logical_min) + 1;
+#if HID_VERBOSE_HID_DEBUG
+          note_axis_write("Hat", w_hat, f.usage_page, f.usage);
+#endif
           ctx->state.hat = normalized_hat;
         } else {
           ctx->state.hat = 0; // centered
@@ -119,14 +205,26 @@ void hid_decode_report(const uint8_t *report, size_t report_size,
       }
     } else if (f.usage_page == 0x02) { // Sim
       if (f.usage == 0xBA)
-        ctx->state.z = normalize_axis(raw_val, f.logical_min,
-                                      f.logical_max); // Rudder -> Z
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("Z", w_z, f.usage_page, f.usage); // Rudder -> Z
+#endif
+        ctx->state.z = normalize_axis(raw_val, f.logical_min, f.logical_max);
+      }
       else if (f.usage == 0xBB)
-        ctx->state.slider1 = normalize_axis(
-            raw_val, f.logical_min, f.logical_max); // Throttle -> Slider
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("Slider1", w_s1, f.usage_page, f.usage);
+#endif
+        ctx->state.slider1 = normalize_axis(raw_val, f.logical_min, f.logical_max);
+      }
       else if (f.usage == 0xBF)
-        ctx->state.slider2 =
-            normalize_axis(raw_val, f.logical_min, f.logical_max); // ToeBrake
+      {
+#if HID_VERBOSE_HID_DEBUG
+        note_axis_write("Slider2", w_s2, f.usage_page, f.usage);
+#endif
+        ctx->state.slider2 = normalize_axis(raw_val, f.logical_min, f.logical_max);
+      }
     } else if (f.usage_page == 0x09) {                             // Buttons
       if (raw_val) {
         int btn_idx = f.usage - 1;
