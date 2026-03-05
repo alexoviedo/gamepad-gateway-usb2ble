@@ -1,4 +1,5 @@
 #include "hid_parser.h"
+
 #include <esp_log.h>
 #include <string.h>
 
@@ -110,10 +111,13 @@ void hid_parse_report_descriptor(const uint8_t *desc, size_t len,
       if (tag == 8 || tag == 9 || tag == 11) { // Input, Output, Feature
         int coll_type = (tag == 8) ? 0 : (tag == 9 ? 1 : 2);
 
+        // HID Input item flags: bit0=Constant, bit1=Variable, bit2=Relative
         bool is_constant = (data & 0x01);
+        bool is_variable = (data & 0x02);
+        bool is_relative = (data & 0x04);
 
-        // If it's not constant, map it!
-        if (!is_constant && coll_type == 0) { // We mainly care about Input
+        // If it's not constant, record it (we mainly care about Input)
+        if (!is_constant && coll_type == 0) {
           uint32_t current_usage_idx = 0;
           uint16_t sequential_usage = lstate.usage_min;
 
@@ -129,27 +133,25 @@ void hid_parse_report_descriptor(const uint8_t *desc, size_t len,
                 sequential_usage++;
             }
 
-            bool map_it = false;
-            if (gstate.usage_page == 0x01) { // Generic Desktop
-              if (usage >= 0x30 && usage <= 0x39)
-                map_it = true;                      // X,Y,Z,Rx,Ry,Rz,Slider,Hat
-            } else if (gstate.usage_page == 0x02) { // Simulation
-              if (usage == 0xBA || usage == 0xBB || usage == 0xBF)
-                map_it = true; // Rudder, Throttle, ToeBrake
-            } else if (gstate.usage_page == 0x09) { // Buttons
-              map_it = true;
-            }
-
-            if (map_it && caps->num_fields < 128) {
-              HidMappedField &f = caps->fields[caps->num_fields++];
-              f.report_id = gstate.report_id;
-              f.bit_offset = bit_offsets[coll_type][gstate.report_id];
-              f.bit_size = gstate.report_size;
-              f.logical_min = gstate.logical_min;
-              f.logical_max = gstate.logical_max;
-              f.is_signed = (gstate.logical_min < 0);
-              f.usage_page = gstate.usage_page;
-              f.usage = usage;
+            if (caps->num_elements < MAX_INPUT_ELEMENTS) {
+              InputElement &e = caps->elements[caps->num_elements++];
+              memset(&e, 0, sizeof(e));
+              e.report_id = gstate.report_id;
+              e.bit_offset = (uint16_t)bit_offsets[coll_type][gstate.report_id];
+              e.bit_size = (uint16_t)gstate.report_size;
+              e.logical_min = gstate.logical_min;
+              e.logical_max = gstate.logical_max;
+              e.is_signed = (gstate.logical_min < 0);
+              e.usage_page = gstate.usage_page;
+              e.usage = usage;
+              e.is_relative = is_relative ? 1 : 0;
+              e.is_absolute = is_relative ? 0 : 1;
+              e.is_variable = is_variable ? 1 : 0;
+              e.kind = ie_guess_kind(e.usage_page, e.usage);
+              e.element_id = ie_compute_id(e.usage_page, e.usage, e.report_id,
+                                           e.bit_offset, e.bit_size,
+                                           e.logical_min, e.logical_max,
+                                           e.is_relative);
             }
 
             bit_offsets[coll_type][gstate.report_id] += gstate.report_size;
@@ -176,10 +178,10 @@ void hid_parse_report_descriptor(const uint8_t *desc, size_t len,
     }
   }
 
-  // Simple classification logic
+  // Simple classification logic (still based on common usages)
   int sticks = 0, throttles = 0, pedals = 0, hats = 0, buttons = 0;
-  for (size_t i = 0; i < caps->num_fields; i++) {
-    const auto &f = caps->fields[i];
+  for (size_t i = 0; i < caps->num_elements; i++) {
+    const auto &f = caps->elements[i];
     if (f.usage_page == 0x01 && (f.usage == 0x30 || f.usage == 0x31))
       sticks++;
     if (f.usage_page == 0x02 && f.usage == 0xBB)
