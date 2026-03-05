@@ -7,9 +7,11 @@
 #include <string.h>
 
 // helper to extract little-endian bits spanning across bytes
-static int32_t extract_bits(const uint8_t *report, size_t report_size,
-                            uint32_t bit_offset, uint32_t bit_size,
-                            bool is_signed) {
+// NOTE: Legacy helper retained for reference and potential future reuse.
+// The current element-table decoder path does not call this directly.
+[[maybe_unused]] static int32_t extract_bits(const uint8_t *report, size_t report_size,
+                                            uint32_t bit_offset, uint32_t bit_size,
+                                            bool is_signed) {
   if (bit_size == 0)
     return 0;
 

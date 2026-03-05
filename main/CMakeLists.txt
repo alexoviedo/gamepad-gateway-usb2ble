@@ -5,6 +5,7 @@ idf_component_register(
          "hid_parser.cpp"
          "input_decoder.cpp"
          "input_elements.cpp"
+         "mapping_engine.cpp"
          "ble_gamepad.cpp"
     INCLUDE_DIRS "."
 

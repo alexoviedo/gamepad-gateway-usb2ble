@@ -178,34 +178,108 @@ void hid_parse_report_descriptor(const uint8_t *desc, size_t len,
     }
   }
 
-  // Simple classification logic (still based on common usages)
-  int sticks = 0, throttles = 0, pedals = 0, hats = 0, buttons = 0;
-  for (size_t i = 0; i < caps->num_elements; i++) {
-    const auto &f = caps->elements[i];
-    if (f.usage_page == 0x01 && (f.usage == 0x30 || f.usage == 0x31))
-      sticks++;
-    if (f.usage_page == 0x02 && f.usage == 0xBB)
-      throttles++; // Throttle
-    if (f.usage_page == 0x01 && f.usage == 0x36)
-      throttles++; // Slider often acts as throttle
-    if (f.usage_page == 0x02 && (f.usage == 0xBA || f.usage == 0xBF))
-      pedals++; // Rudder/Brake
-    if (f.usage_page == 0x09)
-      buttons++;
-    if (f.usage_page == 0x01 && f.usage == 0x39)
-      hats++;
+    // Role classification (score-based).
+  //
+  // Background: Many throttle quadrants include a "mini-stick" that exposes X/Y axes.
+  // A naive rule like "has X/Y => stick" misclassifies throttles and causes the
+  // runtime default mapping to bind primary axes to the wrong device (and can
+  // rebind them again as devices connect/disconnect).
+  struct RoleMetrics {
+    int axes = 0;
+    int buttons = 0;
+    int hats = 0;
+    bool has_x = false;
+    bool has_y = false;
+    bool has_z = false;
+    bool has_rx = false;
+    bool has_ry = false;
+    bool has_rz = false;
+    bool has_slider = false;
+    bool has_dial = false;
+    int sim_throttle = 0;  // Usage Page 0x02, Usage 0x00BB
+    int sim_rudder = 0;    // Usage Page 0x02, Usage 0x00BA
+    int sim_brake = 0;     // Usage Page 0x02, Usage 0x00BF
+  } rm;
+
+  for (uint32_t i = 0; i < caps->num_elements; i++) {
+    const InputElement &e = caps->elements[i];
+
+    if (e.kind == IE_KIND_AXIS) {
+      rm.axes++;
+      if (e.usage_page == 0x0001) {
+        if (e.usage == 0x0030) rm.has_x = true;
+        if (e.usage == 0x0031) rm.has_y = true;
+        if (e.usage == 0x0032) rm.has_z = true;
+        if (e.usage == 0x0033) rm.has_rx = true;
+        if (e.usage == 0x0034) rm.has_ry = true;
+        if (e.usage == 0x0035) rm.has_rz = true;
+        if (e.usage == 0x0036) rm.has_slider = true;
+        if (e.usage == 0x0037) rm.has_dial = true;
+      }
+      if (e.usage_page == 0x0002) {
+        if (e.usage == 0x00BB) rm.sim_throttle++;
+        if (e.usage == 0x00BA) rm.sim_rudder++;
+        if (e.usage == 0x00BF) rm.sim_brake++;
+      }
+    } else if (e.kind == IE_KIND_BUTTON) {
+      rm.buttons++;
+    } else if (e.kind == IE_KIND_HAT) {
+      rm.hats++;
+    }
   }
 
-  if (pedals > 0 && sticks == 0)
-    caps->role = DeviceRole::PEDALS;
-  else if (throttles > 0 && sticks == 0 && hats == 0)
-    caps->role = DeviceRole::THROTTLE;
-  else if (sticks > 0)
-    caps->role = DeviceRole::STICK;
-  else if (buttons > 0)
-    caps->role = DeviceRole::STICK; // fallback
-  else
-    caps->role = DeviceRole::UNKNOWN;
+  int stick_score = 0;
+  int throttle_score = 0;
+  int pedals_score = 0;
 
-  ESP_LOGI(TAG, "Classified device as Role %d", (int)caps->role);
+  // Stick score: X/Y + hat + lots of buttons; penalize "too many axes" which is common on throttles.
+  if (rm.has_x && rm.has_y) stick_score += 30;
+  else if (rm.has_x || rm.has_y) stick_score += 10;
+  if (rm.hats > 0) stick_score += 6;
+  if (rm.buttons >= 12) stick_score += 8;
+  else if (rm.buttons >= 8) stick_score += 6;
+  else if (rm.buttons >= 4) stick_score += 2;
+  if (rm.has_rz) stick_score += 4;
+  if (rm.axes > 5) stick_score -= (rm.axes - 5) * 10;  // big penalty: throttle-like
+  if (rm.sim_throttle > 0) stick_score -= 10;
+  if (rm.sim_rudder > 0 || rm.sim_brake > 0) stick_score -= 15;
+
+  // Throttle score: throttle/slider/dial + many axes/buttons; tolerate X/Y (mini-stick).
+  if (rm.sim_throttle > 0) throttle_score += 35;
+  if (rm.has_slider) throttle_score += 12;
+  if (rm.has_dial) throttle_score += 6;
+  if (rm.axes >= 6) throttle_score += 8;
+  if (rm.buttons >= 8) throttle_score += 6;
+  if (rm.hats > 0) throttle_score += 2;
+  if (rm.has_x && rm.has_y) throttle_score += 2;  // mini-stick present
+  if (rm.sim_rudder > 0) throttle_score -= 10;
+  if (rm.sim_brake > 0) throttle_score -= 5;
+
+  // Pedals score: rudder/brake usages, ~3 axes, few/no buttons/hats, often Z + Rx/Ry.
+  if (rm.sim_rudder > 0) pedals_score += 35;
+  if (rm.sim_brake > 0) pedals_score += 20;
+  if (rm.axes == 3) pedals_score += 10;
+  if (rm.hats == 0) pedals_score += 5;
+  if (rm.buttons <= 4) pedals_score += 5;
+  if (!rm.has_x && !rm.has_y && (rm.has_z || rm.has_rz) && (rm.has_rx || rm.has_ry)) pedals_score += 10;
+  if (rm.buttons >= 8) pedals_score -= 15;
+  if (rm.hats > 0) pedals_score -= 10;
+  if (rm.sim_throttle > 0) pedals_score -= 10;
+
+  // Pick the best-scoring role.
+  caps->role = DeviceRole::UNKNOWN;
+  int best = stick_score;
+  caps->role = DeviceRole::STICK;
+  if (throttle_score > best) {
+    best = throttle_score;
+    caps->role = DeviceRole::THROTTLE;
+  }
+  if (pedals_score > best) {
+    best = pedals_score;
+    caps->role = DeviceRole::PEDALS;
+  }
+
+  ESP_LOGI(TAG,
+           "Role scores: stick=%d throttle=%d pedals=%d (axes=%d btn=%d hat=%d) -> Role %d",
+           stick_score, throttle_score, pedals_score, rm.axes, rm.buttons, rm.hats, (int)caps->role);
 }

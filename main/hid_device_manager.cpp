@@ -1,6 +1,7 @@
 #include "hid_device_manager.h"
 #include "input_decoder.h"
 #include "input_elements.h"
+#include "mapping_engine.h"
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -121,7 +122,8 @@ hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
       xSemaphoreTake(g_state_mutex, portMAX_DELAY);
       hid_decode_report(report_data, report_length, &g_devices[ctx_idx]);
       log_element_samples(&g_devices[ctx_idx]);
-      hid_merge_states(g_devices, MAX_DEVICES, &g_merged_state);
+      // Deterministic mapping (replaces the legacy per-axis max-abs merge).
+      mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
       xSemaphoreGive(g_state_mutex);
     }
   } else if (event == HID_HOST_INTERFACE_EVENT_DISCONNECTED) {
@@ -129,7 +131,12 @@ hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
     if (ctx_idx >= 0) {
       xSemaphoreTake(g_state_mutex, portMAX_DELAY);
       g_devices[ctx_idx].active = false;
-      hid_merge_states(g_devices, MAX_DEVICES, &g_merged_state);
+      // caps.elements is a fixed-size array; memset(caps) already clears all element values.
+      memset(&g_devices[ctx_idx].caps, 0, sizeof(g_devices[ctx_idx].caps));
+      memset(&g_devices[ctx_idx].state, 0, sizeof(g_devices[ctx_idx].state));
+
+      mapping::mapping_engine_notify_devices_changed();
+      mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
       xSemaphoreGive(g_state_mutex);
     }
     hid_host_device_close(hid_device_handle);
@@ -176,6 +183,10 @@ static void hid_init_device_task(void *arg) {
       g_devices[slot].dev_addr = ((uintptr_t)hid_device_handle & 0xFF);
 
       print_device_caps(&g_devices[slot]);
+
+      // New device set -> rebuild deterministic mapping.
+      mapping::mapping_engine_notify_devices_changed();
+      mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
     }
     xSemaphoreGive(g_state_mutex);
   }
@@ -200,6 +211,8 @@ static void hid_host_driver_event_cb(hid_host_device_handle_t hid_device_handle,
 void hid_device_manager_init(void) {
   g_state_mutex = xSemaphoreCreateMutex();
   memset(g_devices, 0, sizeof(g_devices));
+  memset(&g_merged_state, 0, sizeof(g_merged_state));
+  mapping::mapping_engine_init();
 
   hid_host_driver_config_t driver_config = {.create_background_task = true,
                                             .task_priority = 5,
