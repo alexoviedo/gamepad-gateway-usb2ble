@@ -1,4 +1,6 @@
 #include "ble_gamepad.h"
+#include "ble_config_service.h"
+#include "app_mode.h"
 #include "hid_device_manager.h"
 #include "usb_host_manager.h"
 
@@ -65,8 +67,15 @@ extern "C" void app_main() {
   }
   ESP_ERROR_CHECK(ret);
 
+  // Determine boot mode (RUN vs CONFIG). This is persisted in NVS.
+  app_mode_init();
+
   // 1) Init BLE (NimBLE host runs in its own FreeRTOS task)
-  ble_gamepad_init();
+  if (app_mode_current() == APP_MODE_CONFIG) {
+    ble_config_init();
+  } else {
+    ble_gamepad_init();
+  }
 
   // 2) Init USB Host (daemon task handles host events)
   usb_host_manager_init();
@@ -84,10 +93,27 @@ extern "C" void app_main() {
   const TickType_t period = pdMS_TO_TICKS(20); // 50 Hz
   TickType_t last_wake = xTaskGetTickCount();
 
+  // In CONFIG mode, stream samples to WebBLE at 60Hz (separate cadence from HID).
+  // HID output is paused by skipping ble_gamepad_send_state.
+  if (app_mode_current() == APP_MODE_CONFIG) {
+    xTaskCreate(
+        [](void *) {
+          const TickType_t p = pdMS_TO_TICKS(1000 / 60);
+          TickType_t lw = xTaskGetTickCount();
+          while (true) {
+            ble_config_service_stream_tick();
+            vTaskDelayUntil(&lw, p);
+          }
+        },
+        "cfg_stream", 4096, nullptr, 4, nullptr);
+  }
+
   while (1) {
     hid_device_manager_get_merged_state(&usb_state);
     translate_usb_to_ble(&usb_state, &ble_state);
-    ble_gamepad_send_state(&ble_state);
+    if (app_mode_current() == APP_MODE_RUN) {
+      ble_gamepad_send_state(&ble_state);
+    }
 
     vTaskDelayUntil(&last_wake, period);
   }

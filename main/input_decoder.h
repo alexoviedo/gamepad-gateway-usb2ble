@@ -11,6 +11,13 @@ struct HidDeviceContext {
   bool active;
   uint8_t dev_addr; // USB device address to match disconnects (legacy)
 
+  // Cached raw HID report descriptor for WebBLE configuration / inspection.
+  // NOTE: This is copied at enumeration time. If the descriptor is larger than
+  // MAX_HID_REPORT_DESC_LEN, it is truncated.
+  static constexpr size_t MAX_HID_REPORT_DESC_LEN = 1024;
+  uint16_t report_desc_len;
+  uint8_t report_desc[MAX_HID_REPORT_DESC_LEN];
+
   // Last time any input element changed (ms since boot)
   uint32_t last_report_ms;
 

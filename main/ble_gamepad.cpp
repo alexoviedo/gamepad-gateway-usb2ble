@@ -1,4 +1,6 @@
+// main/ble_gamepad.cpp
 #include "ble_gamepad.h"
+#include "ble_config_service.h"
 
 #include <string.h>
 
@@ -30,20 +32,32 @@ extern "C" esp_err_t esp_nimble_hci_and_controller_deinit(void) __attribute__((w
 
 static const char *TAG = "BLE_GAMEPAD";
 
+// -----------------------------------------------------------------------------
+// Weak fallbacks for ble_config_service_*
+// -----------------------------------------------------------------------------
+// These make ble_gamepad.cpp link-safe even if ble_config_service.cpp is not
+// exporting these symbols (static/namespace/#if excluded/etc).
+//
+// If ble_config_service.cpp provides real (strong) definitions, those will
+// override these weak ones automatically.
+__attribute__((weak)) void ble_config_service_init(void) {}
+__attribute__((weak)) void ble_config_service_on_connect(uint16_t) {}
+__attribute__((weak)) void ble_config_service_on_disconnect(void) {}
+__attribute__((weak)) void ble_config_service_on_subscribe(uint16_t, uint8_t) {}
+__attribute__((weak)) void ble_config_service_stream_tick(void) {}
+__attribute__((weak)) const struct ble_gatt_svc_def *ble_config_service_gatt_defs(void) { return nullptr; }
+__attribute__((weak)) const char *ble_config_service_uuid_str(void) { return "missing-ble_config_service"; }
+
+// When true, we boot in CONFIG mode (custom GATT service for WebBLE).
+// When false, we boot in RUN mode (HID gamepad).
+static bool g_is_config_mode = false;
+
 // Bluetooth SIG Appearance: Gamepad = 0x03C4.
 static constexpr uint16_t kAppearanceHidGamepad = 0x03C4;
 
 // --------------------------
 // HID Report (match ESP32-BLE-Gamepad defaults)
 // --------------------------
-//
-// ESP32-BLE-Gamepad default axes range is 0..32767 (0x7FFF), hats are 0=center,
-// 1..8 directions with Null State enabled.
-//
-// IMPORTANT:
-// Even though the report map contains a Report ID, HOGP "Report" characteristic
-// values generally do NOT include the Report ID byte. The Report Reference
-// descriptor (0x2908) tells the host which report ID this characteristic is.
 
 static constexpr uint8_t kReportIdGamepad = 0x03;
 static constexpr uint8_t kReportTypeInput = 0x01; // HOGP: 1=input
@@ -317,53 +331,65 @@ static void build_gatt_db(void) {
   gatt_svr_svcs[0].uuid = (ble_uuid_t *)&UUID_SVC_DEVINFO;
   gatt_svr_svcs[0].characteristics = g_devinfo_chrs;
 
-  // Battery (0x180F)
-  g_bas_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_BATTERY_LEVEL;
-  g_bas_chrs[0].access_cb = gatt_access_battery;
-  g_bas_chrs[0].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
-  g_bas_chrs[0].val_handle = &g_battery_level_handle;
+  if (g_is_config_mode) {
+    // CONFIG mode: register custom WebBLE configuration service only (plus DIS).
+    const struct ble_gatt_svc_def *cfg = ble_config_service_gatt_defs();
+    if (cfg && cfg[0].uuid) {
+      // Copy service def (characteristics are owned by ble_config_service.cpp).
+      gatt_svr_svcs[1] = cfg[0];
+    } else {
+      ESP_LOGE(TAG, "CONFIG mode requested but ble_config_service_gatt_defs() missing/empty. (Check ble_config_service.cpp exports)");
+      // Fall back to just DIS so BLE still comes up and advertises.
+    }
+  } else {
+    // RUN mode: Battery (0x180F)
+    g_bas_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_BATTERY_LEVEL;
+    g_bas_chrs[0].access_cb = gatt_access_battery;
+    g_bas_chrs[0].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
+    g_bas_chrs[0].val_handle = &g_battery_level_handle;
 
-  gatt_svr_svcs[1].type = BLE_GATT_SVC_TYPE_PRIMARY;
-  gatt_svr_svcs[1].uuid = (ble_uuid_t *)&UUID_SVC_BAS;
-  gatt_svr_svcs[1].characteristics = g_bas_chrs;
+    gatt_svr_svcs[1].type = BLE_GATT_SVC_TYPE_PRIMARY;
+    gatt_svr_svcs[1].uuid = (ble_uuid_t *)&UUID_SVC_BAS;
+    gatt_svr_svcs[1].characteristics = g_bas_chrs;
 
-  // HID (0x1812)
-  g_hid_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_PROTOCOL_MODE;
-  g_hid_chrs[0].access_cb = gatt_access_hid;
-  g_hid_chrs[0].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP;
+    // HID (0x1812)
+    g_hid_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_PROTOCOL_MODE;
+    g_hid_chrs[0].access_cb = gatt_access_hid;
+    g_hid_chrs[0].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP;
 
-  // Report Map (+ External Report Reference -> BAS)
-  g_report_map_descs[0].uuid = (ble_uuid_t *)&UUID_DSC_EXT_REPORT_REF;
-  g_report_map_descs[0].att_flags = BLE_ATT_F_READ;
-  g_report_map_descs[0].access_cb = gatt_access_ext_report_ref;
+    // Report Map (+ External Report Reference -> BAS)
+    g_report_map_descs[0].uuid = (ble_uuid_t *)&UUID_DSC_EXT_REPORT_REF;
+    g_report_map_descs[0].att_flags = BLE_ATT_F_READ;
+    g_report_map_descs[0].access_cb = gatt_access_ext_report_ref;
 
-  g_hid_chrs[1].uuid = (ble_uuid_t *)&UUID_CHR_REPORT_MAP;
-  g_hid_chrs[1].access_cb = gatt_access_hid;
-  g_hid_chrs[1].flags = BLE_GATT_CHR_F_READ;
-  g_hid_chrs[1].descriptors = g_report_map_descs;
+    g_hid_chrs[1].uuid = (ble_uuid_t *)&UUID_CHR_REPORT_MAP;
+    g_hid_chrs[1].access_cb = gatt_access_hid;
+    g_hid_chrs[1].flags = BLE_GATT_CHR_F_READ;
+    g_hid_chrs[1].descriptors = g_report_map_descs;
 
-  g_hid_chrs[2].uuid = (ble_uuid_t *)&UUID_CHR_HID_INFO;
-  g_hid_chrs[2].access_cb = gatt_access_hid;
-  g_hid_chrs[2].flags = BLE_GATT_CHR_F_READ;
+    g_hid_chrs[2].uuid = (ble_uuid_t *)&UUID_CHR_HID_INFO;
+    g_hid_chrs[2].access_cb = gatt_access_hid;
+    g_hid_chrs[2].flags = BLE_GATT_CHR_F_READ;
 
-  g_hid_chrs[3].uuid = (ble_uuid_t *)&UUID_CHR_HID_CTRL_PT;
-  g_hid_chrs[3].access_cb = gatt_access_hid;
-  g_hid_chrs[3].flags = BLE_GATT_CHR_F_WRITE_NO_RSP;
+    g_hid_chrs[3].uuid = (ble_uuid_t *)&UUID_CHR_HID_CTRL_PT;
+    g_hid_chrs[3].access_cb = gatt_access_hid;
+    g_hid_chrs[3].flags = BLE_GATT_CHR_F_WRITE_NO_RSP;
 
-  // Report (+ Report Reference)
-  g_hid_report_descs[0].uuid = (ble_uuid_t *)&UUID_DSC_REPORT_REF;
-  g_hid_report_descs[0].att_flags = BLE_ATT_F_READ;
-  g_hid_report_descs[0].access_cb = gatt_access_report_ref;
+    // Report (+ Report Reference)
+    g_hid_report_descs[0].uuid = (ble_uuid_t *)&UUID_DSC_REPORT_REF;
+    g_hid_report_descs[0].att_flags = BLE_ATT_F_READ;
+    g_hid_report_descs[0].access_cb = gatt_access_report_ref;
 
-  g_hid_chrs[4].uuid = (ble_uuid_t *)&UUID_CHR_REPORT;
-  g_hid_chrs[4].access_cb = gatt_access_hid;
-  g_hid_chrs[4].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
-  g_hid_chrs[4].val_handle = &g_hid_report_handle;
-  g_hid_chrs[4].descriptors = g_hid_report_descs;
+    g_hid_chrs[4].uuid = (ble_uuid_t *)&UUID_CHR_REPORT;
+    g_hid_chrs[4].access_cb = gatt_access_hid;
+    g_hid_chrs[4].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
+    g_hid_chrs[4].val_handle = &g_hid_report_handle;
+    g_hid_chrs[4].descriptors = g_hid_report_descs;
 
-  gatt_svr_svcs[2].type = BLE_GATT_SVC_TYPE_PRIMARY;
-  gatt_svr_svcs[2].uuid = (ble_uuid_t *)&UUID_SVC_HID;
-  gatt_svr_svcs[2].characteristics = g_hid_chrs;
+    gatt_svr_svcs[2].type = BLE_GATT_SVC_TYPE_PRIMARY;
+    gatt_svr_svcs[2].uuid = (ble_uuid_t *)&UUID_SVC_HID;
+    gatt_svr_svcs[2].characteristics = g_hid_chrs;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +439,10 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
       g_input_notify_enabled = false;
       g_battery_notify_enabled = false;
       ESP_LOGI(TAG, "Connected (handle=%d)", (int)g_conn_handle);
+
+      if (g_is_config_mode) {
+        ble_config_service_on_connect(g_conn_handle);
+      }
     } else {
       ESP_LOGW(TAG, "Connect failed; status=%d", event->connect.status);
       ble_advertise();
@@ -425,10 +455,19 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
     g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     g_input_notify_enabled = false;
     g_battery_notify_enabled = false;
+
+    if (g_is_config_mode) {
+      ble_config_service_on_disconnect();
+    }
     ble_advertise();
     return 0;
 
   case BLE_GAP_EVENT_SUBSCRIBE:
+    if (g_is_config_mode) {
+      ble_config_service_on_subscribe(event->subscribe.attr_handle, event->subscribe.cur_notify);
+      return 0;
+    }
+
     if (event->subscribe.attr_handle == g_hid_report_handle) {
       g_input_notify_enabled = event->subscribe.cur_notify;
       ESP_LOGI(TAG, "Input report notifications %s",
@@ -454,30 +493,59 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
 }
 
 static void ble_advertise(void) {
-  struct ble_hs_adv_fields fields;
-  memset(&fields, 0, sizeof(fields));
+  // Best-effort stop (ignore errors; it may not be advertising).
+  (void)ble_gap_adv_stop();
 
-  fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+  // Keep CONFIG-mode legacy ADV payload small; move 128-bit UUID into scan response.
+  struct ble_hs_adv_fields adv_fields;
+  memset(&adv_fields, 0, sizeof(adv_fields));
 
-  // Put name in ADV (macOS often shows ADV name without requiring scan response).
-  const char *name = ble_svc_gap_device_name();
-  fields.name = (uint8_t *)name;
-  fields.name_len = strlen(name);
-  fields.name_is_complete = 1;
+  adv_fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
 
-  // Appearance in ADV + also set GAP appearance characteristic elsewhere.
-  fields.appearance = kAppearanceHidGamepad;
+  const char *name = g_is_config_mode ? "HOTAS_CFG" : ble_svc_gap_device_name();
+  adv_fields.name = (uint8_t *)name;
+  adv_fields.name_len = strlen(name);
+  adv_fields.name_is_complete = 1;
 
-  // Advertise both HID + Battery UUIDs.
-  static ble_uuid16_t uuids16[] = {BLE_UUID16_INIT(0x1812), BLE_UUID16_INIT(0x180F)};
-  fields.uuids16 = uuids16;
-  fields.num_uuids16 = (uint8_t)(sizeof(uuids16) / sizeof(uuids16[0]));
-  fields.uuids16_is_complete = 1;
+  if (!g_is_config_mode) {
+    // RUN mode: Appearance in ADV + advertise HID + Battery UUIDs.
+    adv_fields.appearance = kAppearanceHidGamepad;
+    static ble_uuid16_t uuids16[] = {BLE_UUID16_INIT(0x1812), BLE_UUID16_INIT(0x180F)};
+    adv_fields.uuids16 = uuids16;
+    adv_fields.num_uuids16 = (uint8_t)(sizeof(uuids16) / sizeof(uuids16[0]));
+    adv_fields.uuids16_is_complete = 1;
+  }
 
-  int rc = ble_gap_adv_set_fields(&fields);
+  int rc = ble_gap_adv_set_fields(&adv_fields);
   if (rc != 0) {
     ESP_LOGE(TAG, "ble_gap_adv_set_fields failed: %d", rc);
     return;
+  }
+
+  if (g_is_config_mode) {
+    // CONFIG mode: put the custom 128-bit UUID in the scan response (more reliable).
+    struct ble_hs_adv_fields rsp_fields;
+    memset(&rsp_fields, 0, sizeof(rsp_fields));
+
+    static const ble_uuid128_t kCfgSvcUuid = BLE_UUID128_INIT(
+        0x90, 0x2d, 0x1a, 0x6b, 0x1c, 0x9c, 0x3f, 0x4a,
+        0xb1, 0xe0, 0x4f, 0xd8, 0xf5, 0xb2, 0xc1, 0xa1);
+    static ble_uuid128_t uuids128[] = {kCfgSvcUuid};
+
+    rsp_fields.uuids128 = uuids128;
+    rsp_fields.num_uuids128 = (uint8_t)(sizeof(uuids128) / sizeof(uuids128[0]));
+    rsp_fields.uuids128_is_complete = 1;
+
+    rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
+    if (rc != 0) {
+      ESP_LOGE(TAG, "ble_gap_adv_rsp_set_fields failed: %d", rc);
+      return;
+    }
+  } else {
+    // RUN mode: clear scan response so we don't carry over stale CONFIG fields.
+    struct ble_hs_adv_fields empty_rsp;
+    memset(&empty_rsp, 0, sizeof(empty_rsp));
+    (void)ble_gap_adv_rsp_set_fields(&empty_rsp);
   }
 
   struct ble_gap_adv_params adv_params;
@@ -490,7 +558,11 @@ static void ble_advertise(void) {
   if (rc != 0) {
     ESP_LOGE(TAG, "ble_gap_adv_start failed: %d", rc);
   } else {
-    ESP_LOGI(TAG, "Advertising as '%s' (HID=0x1812, BAS=0x180F)", name);
+    if (g_is_config_mode) {
+      ESP_LOGI(TAG, "Advertising as '%s' (CFG svc %s)", name, ble_config_service_uuid_str());
+    } else {
+      ESP_LOGI(TAG, "Advertising as '%s' (HID=0x1812, BAS=0x180F)", name);
+    }
   }
 }
 
@@ -510,7 +582,9 @@ static void host_task(void *) {
   nimble_port_freertos_deinit();
 }
 
-void ble_gamepad_init(void) {
+static void ble_common_init(bool config_mode) {
+  g_is_config_mode = config_mode;
+
   // NVS required for bonding/key storage.
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -535,8 +609,17 @@ void ble_gamepad_init(void) {
   ble_svc_gap_init();
   ble_svc_gatt_init();
 
-  ble_svc_gap_device_name_set("HOTAS_BRIDGE");
-  ble_svc_gap_device_appearance_set(kAppearanceHidGamepad);
+  if (g_is_config_mode) {
+    ble_svc_gap_device_name_set("HOTAS_CONFIG");
+    ble_svc_gap_device_appearance_set(0);
+
+    // If the real config service isn't linked, this will just be the weak no-op
+    // and we'll log loudly when gatt_defs() is missing.
+    ble_config_service_init();
+  } else {
+    ble_svc_gap_device_name_set("HOTAS_BRIDGE");
+    ble_svc_gap_device_appearance_set(kAppearanceHidGamepad);
+  }
 
   build_gatt_db();
 
@@ -564,13 +647,29 @@ void ble_gamepad_init(void) {
 
   nimble_port_freertos_init(host_task);
 
-  ESP_LOGI(TAG,
-           "BLE HID gamepad initialized (ReportID=%u, report=%u bytes, map=%u bytes)",
-           (unsigned)kReportIdGamepad, (unsigned)sizeof(GamepadInputReport),
-           (unsigned)sizeof(kHidReportMap));
+  if (g_is_config_mode) {
+    ESP_LOGI(TAG, "BLE CONFIG initialized (service UUID=%s)", ble_config_service_uuid_str());
+  } else {
+    ESP_LOGI(TAG,
+             "BLE HID gamepad initialized (ReportID=%u, report=%u bytes, map=%u bytes)",
+             (unsigned)kReportIdGamepad, (unsigned)sizeof(GamepadInputReport),
+             (unsigned)sizeof(kHidReportMap));
+  }
+}
+
+void ble_gamepad_init(void) {
+  ble_common_init(false);
+}
+
+void ble_config_init(void) {
+  ble_common_init(true);
 }
 
 void ble_gamepad_send_state(const GamepadState *s) {
+  if (g_is_config_mode) {
+    // CONFIG mode: HID output is paused.
+    return;
+  }
   if (!g_ble_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
     return;
   }

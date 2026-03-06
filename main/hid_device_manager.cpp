@@ -134,6 +134,7 @@ hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
       // caps.elements is a fixed-size array; memset(caps) already clears all element values.
       memset(&g_devices[ctx_idx].caps, 0, sizeof(g_devices[ctx_idx].caps));
       memset(&g_devices[ctx_idx].state, 0, sizeof(g_devices[ctx_idx].state));
+      g_devices[ctx_idx].report_desc_len = 0;
 
       mapping::mapping_engine_notify_devices_changed();
       mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
@@ -178,6 +179,14 @@ static void hid_init_device_task(void *arg) {
     if (slot >= 0) {
       // Parse it!
       memset(&g_devices[slot], 0, sizeof(HidDeviceContext));
+
+      // Cache raw report descriptor for WebBLE inspection.
+      const size_t max_desc = HidDeviceContext::MAX_HID_REPORT_DESC_LEN;
+      g_devices[slot].report_desc_len = (uint16_t)((desc_len > max_desc) ? max_desc : desc_len);
+      if (g_devices[slot].report_desc_len > 0) {
+        memcpy(g_devices[slot].report_desc, desc, g_devices[slot].report_desc_len);
+      }
+
       hid_parse_report_descriptor(desc, desc_len, &g_devices[slot].caps);
       g_devices[slot].active = true;
       g_devices[slot].dev_addr = ((uintptr_t)hid_device_handle & 0xFF);
@@ -236,4 +245,78 @@ void hid_device_manager_get_merged_state(struct GamepadState *out_state) {
     memcpy(out_state, &g_merged_state, sizeof(GamepadState));
     xSemaphoreGive(g_state_mutex);
   }
+}
+
+// -----------------------------------------------------------------------------
+// WebBLE / Config Introspection
+// -----------------------------------------------------------------------------
+
+static inline uint32_t make_device_id_from_ctx(const HidDeviceContext &ctx) {
+  // Reserve 0 as invalid.
+  return (uint32_t)ctx.dev_addr + 1;
+}
+
+size_t hid_device_manager_list_devices(HidDeviceInfo *out_infos, size_t max_infos) {
+  if (!out_infos || max_infos == 0 || !g_state_mutex) return 0;
+  size_t n = 0;
+  xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+  for (int i = 0; i < MAX_DEVICES && n < max_infos; i++) {
+    if (!g_devices[i].active) continue;
+    out_infos[n].device_id = make_device_id_from_ctx(g_devices[i]);
+    out_infos[n].dev_addr = g_devices[i].dev_addr;
+    out_infos[n].role = (uint8_t)g_devices[i].caps.role;
+    out_infos[n].num_elements = (uint16_t)g_devices[i].caps.num_elements;
+    out_infos[n].report_desc_len = g_devices[i].report_desc_len;
+    n++;
+  }
+  xSemaphoreGive(g_state_mutex);
+  return n;
+}
+
+static HidDeviceContext *find_device_by_id(uint32_t device_id) {
+  if (device_id == 0) return nullptr;
+  for (int i = 0; i < MAX_DEVICES; i++) {
+    if (!g_devices[i].active) continue;
+    if (make_device_id_from_ctx(g_devices[i]) == device_id) return &g_devices[i];
+  }
+  return nullptr;
+}
+
+size_t hid_device_manager_get_report_descriptor(uint32_t device_id, uint8_t *out_buf, size_t max_len) {
+  if (!out_buf || max_len == 0 || !g_state_mutex) return 0;
+  size_t copied = 0;
+  xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+  HidDeviceContext *ctx = find_device_by_id(device_id);
+  if (ctx && ctx->report_desc_len > 0) {
+    copied = (ctx->report_desc_len > max_len) ? max_len : (size_t)ctx->report_desc_len;
+    memcpy(out_buf, ctx->report_desc, copied);
+  }
+  xSemaphoreGive(g_state_mutex);
+  return copied;
+}
+
+size_t hid_device_manager_get_elements(uint32_t device_id, InputElement *out_elems, size_t max_elems) {
+  if (!out_elems || max_elems == 0 || !g_state_mutex) return 0;
+  size_t copied = 0;
+  xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+  HidDeviceContext *ctx = find_device_by_id(device_id);
+  if (ctx && ctx->caps.num_elements > 0) {
+    copied = (ctx->caps.num_elements > max_elems) ? max_elems : ctx->caps.num_elements;
+    memcpy(out_elems, ctx->caps.elements, copied * sizeof(InputElement));
+  }
+  xSemaphoreGive(g_state_mutex);
+  return copied;
+}
+
+bool hid_device_manager_get_device_state(uint32_t device_id, struct GamepadState *out_state) {
+  if (!out_state || !g_state_mutex) return false;
+  bool ok = false;
+  xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+  HidDeviceContext *ctx = find_device_by_id(device_id);
+  if (ctx) {
+    memcpy(out_state, &ctx->state, sizeof(GamepadState));
+    ok = true;
+  }
+  xSemaphoreGive(g_state_mutex);
+  return ok;
 }

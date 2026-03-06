@@ -7,13 +7,15 @@ idf_component_register(
          "input_elements.cpp"
          "mapping_engine.cpp"
          "ble_gamepad.cpp"
+         "ble_config_service.cpp"
+         "app_mode.cpp"
     INCLUDE_DIRS "."
 
     # Public deps (headers our public includes may expose)
     REQUIRES usb usb_host_hid esp_hid bt
 
     # Private deps (headers we include internally)
-    PRIV_REQUIRES nvs_flash esp_driver_gpio
+    PRIV_REQUIRES nvs_flash esp_driver_gpio json mbedtls
 )
 
 # NimBLE structs use designated initializers; keep warnings quiet on newer GCC.

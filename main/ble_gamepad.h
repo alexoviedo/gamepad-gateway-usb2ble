@@ -8,6 +8,10 @@ extern "C" {
 // Initialize NimBLE and start advertising as a Gamepad
 void ble_gamepad_init(void);
 
+// Initialize NimBLE and start advertising the WebBLE Config Service.
+// In this mode, HID gamepad output should be paused/disabled by the caller.
+void ble_config_init(void);
+
 // Send updated gamepad state over BLE (should be called from a task)
 void ble_gamepad_send_state(const struct GamepadState *state);
 
