@@ -1,147 +1,155 @@
-# WebBLE Config Protocol (CONFIG Mode)
+# WebBLE Protocol (Config Mode)
 
-This document describes the **custom BLE GATT service** used for configuring the USB→BLE bridge from a browser (Web Bluetooth).
+This project exposes a **custom BLE GATT service** in **CONFIG mode** so a Web Bluetooth (WebBLE) client can:
 
-## Modes
+- connect
+- enumerate HID devices and fetch their report descriptors
+- start/stop a ~60Hz sample stream
+- read/write a configuration blob
+- optionally reboot into RUN mode
 
-The firmware has two boot modes to avoid BLE “central conflict” scenarios:
+> In **RUN mode** the device advertises as a BLE HID gamepad and does **not** expose this custom service.
 
-- **RUN mode**
-  - Advertises and behaves as a **BLE HID Gamepad** (HOGP)
-  - The WebBLE config service is **not advertised / not registered**
+---
 
-- **CONFIG mode**
-  - Advertises a **custom GATT Config Service** for a browser to connect with Web Bluetooth
-  - **HID gamepad output is paused/disabled**
-  - USB host + HID decoding remain active so the browser can inspect devices and stream samples
+## Service UUID
 
-Mode is persisted in NVS and changed via commands (`reboot_to_run`, `reboot_to_config`).
+**Config Service (primary):**
 
-## Service and Characteristics
+- UUID: `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a1`
+- Advertising name (CONFIG mode): typically `HOTAS_CFG`
 
-### Service UUID
+---
 
-- **Config Service UUID:** `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a1`
+## Characteristics
 
-### Characteristics
+All characteristics below share the same base UUID with the last byte incremented.
 
-All characteristic UUIDs share the same base UUID and differ only by the last byte:
+| Name | UUID | Properties | Direction | Purpose |
+|---|---|---:|---|---|
+| CMD | `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a2` | Write / Write Without Response | client → device | Send JSON commands (UTF‑8 text) |
+| EVT | `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a3` | Notify | device → client | Chunked event/response channel (JSON + binary payloads) |
+| STREAM | `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a4` | Notify | device → client | Fixed-size binary samples (~60Hz when enabled) |
+| CFG | `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a5` | Read / Write | bidirectional | Raw configuration blob (JSON text) |
 
-| Name | Properties | UUID |
-|---|---|---|
-| **CMD** | Write / Write Without Response | `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a2` |
-| **EVT** | Notify | `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a3` |
-| **STREAM** | Notify | `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a4` |
-| **CFG** | Read / Write | `6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a5` |
+---
 
-## CMD (Write): JSON commands
+## CMD: JSON commands
 
-`CMD` accepts UTF‑8 JSON objects.
+The client writes a single JSON object to `CMD` (UTF‑8). The device emits a JSON response on `EVT` (type=1, chunked).
 
-Recommended fields:
-
-- `cmd` (string): command name
-- `rid` (number, optional): request id echoed in the response
-- additional parameters per command
-
-### Supported commands (skeleton)
-
-- `get_devices`
-- `get_descriptor` (requires `device_id`)
-- `start_stream`
-- `stop_stream`
-- `get_config`
-- `set_config` (requires `config` object/value)
-- `save_profile` (stub)
-- `reboot_to_run`
-- `reboot_to_config`
-
-Example:
+Common request shape:
 
 ```json
 { "rid": 1, "cmd": "get_devices" }
 ```
 
-## EVT (Notify): responses and async events
+- `rid` is optional but recommended (request id). It is echoed back in responses.
 
-EVT is notification-only. Subscribe to EVT before sending commands.
+### Supported `cmd` values
 
-### Chunking / framing
+#### `get_devices`
+Returns an array of attached HID devices.
 
-To remain compatible with **very small ATT MTUs** (e.g., MTU=23 → 20 bytes payload), EVT notifications use a small binary chunk header.
-
-Each EVT notification payload is:
-
-```text
-u8  version      (1)
-u8  type         (1=json, 2=descriptor, 3=config)
-u16 msg_id
-u16 offset
-u16 total_len
-u8  payload[]    (fragment)
-```
-
-- `msg_id` groups fragments belonging to the same message
-- `offset` is the byte offset of `payload` within the full message
-- `total_len` is the total byte length of the full message
-
-`type=1` payload is **UTF‑8 JSON bytes**.
-
-`type=2` payload is **raw HID report descriptor bytes** (returned by `get_descriptor`).
-
-### Response JSON shape
-
-Responses use a simple envelope:
+Response payload (example):
 
 ```json
 {
-  "evt": "resp",
-  "rid": 1,
-  "cmd": "get_devices",
-  "devices": [ ... ]
+  "evt":"resp",
+  "rid":1,
+  "cmd":"get_devices",
+  "devices":[
+    {"device_id":123,"dev_addr":1,"role":"stick","num_elements":21,"report_desc_len":134}
+  ]
 }
 ```
 
-## STREAM (Notify): real-time element/value stream
+#### `get_descriptor`
+Requests the HID report descriptor for a `device_id`.
 
-STREAM is notification-only. Subscribe to STREAM and then send `start_stream`.
+Request:
 
-### Payload format
-
-STREAM notifications are **binary** (to reliably hit 60Hz even at MTU=23):
-
-```text
-u8  version   (1)
-u8  flags     (reserved)
-u32 device_id
-u32 element_id
-i32 raw
-i16 norm_q15  (norm_m1_1 * 32767)
+```json
+{ "rid": 2, "cmd": "get_descriptor", "device_id": 123 }
 ```
 
-- `device_id` matches the values returned by `get_devices`
-- `element_id` is the stable 32-bit element id computed by the descriptor parser
-- `raw` is the decoded integer value for that element
-- `norm_q15` is the element’s normalized value in Q15 form (-32767..32767)
+Response:
 
-### Streaming behavior
+- A normal JSON response on `EVT` (type=1) with `descriptor_len`
+- The raw descriptor bytes are streamed on `EVT` as **type=2** frames (see EVT framing below)
 
-Current skeleton behavior:
+#### `start_stream` / `stop_stream`
+Enable/disable the ~60Hz binary sample stream on the `STREAM` characteristic.
 
-- Runs at **60Hz** (one notification per tick)
-- Cycles through active devices and chooses the next **axis/hat** element to emit
+Request:
 
-## CFG (Read/Write): profile/config JSON transfer
+```json
+{ "rid": 3, "cmd": "start_stream" }
+```
 
-`CFG` provides a raw JSON byte buffer that can be:
+#### `get_config`
+Returns the current configuration blob as a JSON string field.
 
-- **Read** (supports read offset via GATT “read blob”)
-- **Written** sequentially (supports offset=0 reset; sequential append)
+#### `set_config`
+Sets the configuration blob from a JSON object in the `config` field.
 
-This is currently **in-memory only** and used by `get_config` / `set_config`.
+#### `reboot_to_run` / `reboot_to_config`
+Schedules a reboot into the specified mode.
 
-## Notes / current limitations
+---
 
-- This is an initial protocol skeleton intended to enable early WebBLE bring-up.
-- Persistent profile storage (`save_profile`) is a stub.
-- The stream currently emits one element sample per 60Hz tick (not a full snapshot).
+## EVT: chunked notifications
+
+Because some clients may be limited to an MTU of 23 (20-byte attribute payload), `EVT` uses a simple chunking header.
+
+**Frame format (little-endian fields):**
+
+| Offset | Type | Name | Notes |
+|---:|---|---|---|
+| 0 | `u8` | version | currently `1` |
+| 1 | `u8` | type | `1=json`, `2=descriptor`, `3=config` (reserved) |
+| 2 | `u16` | msg_id | increments per logical message |
+| 4 | `u16` | offset | byte offset within the message |
+| 6 | `u16` | total_len | total message length in bytes |
+| 8 | `u8[]` | payload | chunk bytes (typically ≤12 bytes at MTU=23) |
+
+The client reassembles chunks by `(msg_id, total_len)` until `offset + payload_len == total_len`.
+
+---
+
+## STREAM: 60Hz binary samples
+
+When streaming is enabled and notifications are subscribed, the device emits one `StreamSample` about every 16 ms.
+
+**Structure (`packed`):**
+
+| Field | Type | Notes |
+|---|---|---|
+| version | `u8` | currently `1` |
+| flags | `u8` | reserved (0) |
+| device_id | `u32` | identifies which HID device |
+| element_id | `u32` | identifies which input element |
+| raw | `i32` | raw sample value |
+| norm_q15 | `i16` | normalized [-1..1] mapped to Q15 (×32767) |
+
+Total: 16 bytes.
+
+---
+
+## CFG: configuration blob
+
+`CFG` is a raw byte characteristic intended to hold a JSON document.
+
+- **Read:** returns the current config bytes.
+- **Write:** supports sequential writes; if the write offset is 0 the blob is cleared and rebuilt.
+
+Max size: 4096 bytes.
+
+---
+
+## Web Bluetooth notes
+
+- The Web Bluetooth permission grant must include the Config service UUID.
+  - Include the service UUID in `filters: [{ services: [UUID] }]` and/or `optionalServices: [UUID]`.
+- If Chrome previously connected to the device without requesting the Config UUID, it may cache a permission grant that does not include it.
+  - Fix by removing/forgetting the device from the site's Bluetooth permissions (or clearing site data) and reconnecting.

@@ -33,20 +33,15 @@ extern "C" esp_err_t esp_nimble_hci_and_controller_deinit(void) __attribute__((w
 static const char *TAG = "BLE_GAMEPAD";
 
 // -----------------------------------------------------------------------------
-// Weak fallbacks for ble_config_service_*
+// CONFIG service integration
 // -----------------------------------------------------------------------------
-// These make ble_gamepad.cpp link-safe even if ble_config_service.cpp is not
-// exporting these symbols (static/namespace/#if excluded/etc).
+// The CONFIG-mode WebBLE service is implemented in ble_config_service.cpp.
+// We intentionally do **not** provide weak fallback definitions here.
 //
-// If ble_config_service.cpp provides real (strong) definitions, those will
-// override these weak ones automatically.
-__attribute__((weak)) void ble_config_service_init(void) {}
-__attribute__((weak)) void ble_config_service_on_connect(uint16_t) {}
-__attribute__((weak)) void ble_config_service_on_disconnect(void) {}
-__attribute__((weak)) void ble_config_service_on_subscribe(uint16_t, uint8_t) {}
-__attribute__((weak)) void ble_config_service_stream_tick(void) {}
-__attribute__((weak)) const struct ble_gatt_svc_def *ble_config_service_gatt_defs(void) { return nullptr; }
-__attribute__((weak)) const char *ble_config_service_uuid_str(void) { return "missing-ble_config_service"; }
+// Why: ESP-IDF links components as static archives and only pulls object files
+// that satisfy unresolved symbols. If we provided local weak definitions here,
+// the linker would never pull ble_config_service.cpp, and CONFIG mode would
+// silently degrade (the failure mode seen in logs).
 
 // When true, we boot in CONFIG mode (custom GATT service for WebBLE).
 // When false, we boot in RUN mode (HID gamepad).
@@ -496,7 +491,15 @@ static void ble_advertise(void) {
   // Best-effort stop (ignore errors; it may not be advertising).
   (void)ble_gap_adv_stop();
 
-  // Keep CONFIG-mode legacy ADV payload small; move 128-bit UUID into scan response.
+  // CONFIG mode is used by WebBLE. Some Web Bluetooth stacks only surface devices
+  // whose service UUIDs appear in the primary ADV payload (not just scan response).
+  // We therefore *try* to include the 128-bit UUID in ADV first, and fall back to
+  // putting it in scan response if the ADV payload is rejected.
+  static const ble_uuid128_t kCfgSvcUuid = BLE_UUID128_INIT(
+      0x90, 0x2d, 0x1a, 0x6b, 0x1c, 0x9c, 0x3f, 0x4a,
+      0xb1, 0xe0, 0x4f, 0xd8, 0xf5, 0xb2, 0xc1, 0xa1);
+  static ble_uuid128_t kCfgSvcUuids128[] = {kCfgSvcUuid};
+
   struct ble_hs_adv_fields adv_fields;
   memset(&adv_fields, 0, sizeof(adv_fields));
 
@@ -514,27 +517,40 @@ static void ble_advertise(void) {
     adv_fields.uuids16 = uuids16;
     adv_fields.num_uuids16 = (uint8_t)(sizeof(uuids16) / sizeof(uuids16[0]));
     adv_fields.uuids16_is_complete = 1;
+  } else {
+    // CONFIG mode: try to include the 128-bit UUID in ADV.
+    adv_fields.uuids128 = kCfgSvcUuids128;
+    adv_fields.num_uuids128 = (uint8_t)(sizeof(kCfgSvcUuids128) / sizeof(kCfgSvcUuids128[0]));
+    adv_fields.uuids128_is_complete = 1;
   }
 
+  bool cfg_uuid_in_adv = g_is_config_mode;
+
   int rc = ble_gap_adv_set_fields(&adv_fields);
+  if (rc != 0 && g_is_config_mode) {
+    // Fallback: remove UUID128 from ADV and retry; then place it in scan response.
+    cfg_uuid_in_adv = false;
+    adv_fields.uuids128 = nullptr;
+    adv_fields.num_uuids128 = 0;
+    adv_fields.uuids128_is_complete = 0;
+
+    rc = ble_gap_adv_set_fields(&adv_fields);
+  }
   if (rc != 0) {
     ESP_LOGE(TAG, "ble_gap_adv_set_fields failed: %d", rc);
     return;
   }
 
   if (g_is_config_mode) {
-    // CONFIG mode: put the custom 128-bit UUID in the scan response (more reliable).
+    // If we couldn't fit the UUID in ADV, put it in scan response instead.
     struct ble_hs_adv_fields rsp_fields;
     memset(&rsp_fields, 0, sizeof(rsp_fields));
 
-    static const ble_uuid128_t kCfgSvcUuid = BLE_UUID128_INIT(
-        0x90, 0x2d, 0x1a, 0x6b, 0x1c, 0x9c, 0x3f, 0x4a,
-        0xb1, 0xe0, 0x4f, 0xd8, 0xf5, 0xb2, 0xc1, 0xa1);
-    static ble_uuid128_t uuids128[] = {kCfgSvcUuid};
-
-    rsp_fields.uuids128 = uuids128;
-    rsp_fields.num_uuids128 = (uint8_t)(sizeof(uuids128) / sizeof(uuids128[0]));
-    rsp_fields.uuids128_is_complete = 1;
+    if (!cfg_uuid_in_adv) {
+      rsp_fields.uuids128 = kCfgSvcUuids128;
+      rsp_fields.num_uuids128 = (uint8_t)(sizeof(kCfgSvcUuids128) / sizeof(kCfgSvcUuids128[0]));
+      rsp_fields.uuids128_is_complete = 1;
+    }
 
     rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
     if (rc != 0) {
@@ -610,7 +626,9 @@ static void ble_common_init(bool config_mode) {
   ble_svc_gatt_init();
 
   if (g_is_config_mode) {
-    ble_svc_gap_device_name_set("HOTAS_CONFIG");
+    // Keep the GAP Device Name aligned with the advertising name to reduce
+    // confusion in Web Bluetooth pickers and OS device lists.
+    ble_svc_gap_device_name_set("HOTAS_CFG");
     ble_svc_gap_device_appearance_set(0);
 
     // If the real config service isn't linked, this will just be the weak no-op

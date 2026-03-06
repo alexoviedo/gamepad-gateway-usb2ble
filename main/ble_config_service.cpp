@@ -78,6 +78,12 @@ static uint16_t g_msg_id = 0;
 static std::string g_config_json = "{}";
 static constexpr size_t kMaxConfigJsonBytes = 4096;
 
+// Cache the most recent STREAM sample so the characteristic can be READ.
+// Some NimBLE builds reject NOTIFY-only characteristics without an access_cb.
+static bool g_last_stream_valid = false;
+static constexpr size_t kStreamSampleLen = 16; // sizeof(StreamSample) when packed
+static uint8_t g_last_stream_sample_buf[kStreamSampleLen];
+
 // -----------------------------------------------------------------------------
 // Small chunked notify framing (works even at MTU=23)
 // -----------------------------------------------------------------------------
@@ -369,6 +375,30 @@ static int gatt_access_cfg(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt
   return BLE_ATT_ERR_UNLIKELY;
 }
 
+// Access handler for EVT / STREAM characteristics.
+// We keep these characteristics readable to satisfy some NimBLE validation rules
+// (and to make debugging easier from WebBLE).
+static int gatt_access_evt_stream(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt, void *) {
+  // EVT (read returns empty; notifications carry framed messages).
+  if (ble_uuid_cmp(ctxt->chr->uuid, (const ble_uuid_t *)&UUID_CHR_EVT) == 0) {
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+      return 0; // 0-length read
+    }
+    return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+  }
+
+  // STREAM (read returns the last sample emitted).
+  if (ble_uuid_cmp(ctxt->chr->uuid, (const ble_uuid_t *)&UUID_CHR_STREAM) == 0) {
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+      if (!g_last_stream_valid) return 0;
+      return gatt_read_bytes(ctxt, g_last_stream_sample_buf, kStreamSampleLen);
+    }
+    return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+  }
+
+  return BLE_ATT_ERR_UNLIKELY;
+}
+
 // -----------------------------------------------------------------------------
 // GATT DB objects (static storage)
 // -----------------------------------------------------------------------------
@@ -391,14 +421,14 @@ static const struct ble_gatt_svc_def *build_cfg_svcs_once() {
 
   // EVT (Notify)
   g_cfg_chrs[1].uuid = (ble_uuid_t *)&UUID_CHR_EVT;
-  g_cfg_chrs[1].access_cb = nullptr;
-  g_cfg_chrs[1].flags = BLE_GATT_CHR_F_NOTIFY;
+    g_cfg_chrs[1].access_cb = gatt_access_evt_stream;
+    g_cfg_chrs[1].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
   g_cfg_chrs[1].val_handle = &g_evt_handle;
 
   // STREAM (Notify)
   g_cfg_chrs[2].uuid = (ble_uuid_t *)&UUID_CHR_STREAM;
-  g_cfg_chrs[2].access_cb = nullptr;
-  g_cfg_chrs[2].flags = BLE_GATT_CHR_F_NOTIFY;
+    g_cfg_chrs[2].access_cb = gatt_access_evt_stream;
+    g_cfg_chrs[2].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
   g_cfg_chrs[2].val_handle = &g_stream_handle;
 
   // CFG (Read/Write)
@@ -446,9 +476,9 @@ static int16_t clamp_q15(float v) {
 // -----------------------------------------------------------------------------
 // EXPORTED API
 // -----------------------------------------------------------------------------
-// Your build logs showed the linker looking for UNMANGLED symbols like
-// `ble_config_service_uuid_str` and `ble_config_service_gatt_defs`.
-// So these exports MUST use C linkage to override any weak stubs and match calls.
+// These functions are part of the CONFIG-mode WebBLE service interface.
+// They are declared with C linkage in ble_config_service.h to keep symbol names
+// stable across compilation units and toolchains.
 
 extern "C" {
 
@@ -477,6 +507,8 @@ void ble_config_service_init(void) {
 
   g_msg_id = 0;
 
+  g_last_stream_valid = false;
+
   if (g_config_json.empty()) g_config_json = "{}";
 
   ESP_LOGI(TAG, "Config service init (UUID=%s)", ble_config_service_uuid_str());
@@ -495,6 +527,7 @@ void ble_config_service_on_disconnect(void) {
   g_evt_notify_enabled = false;
   g_stream_notify_enabled = false;
   g_stream_active = false;
+  g_last_stream_valid = false;
 }
 
 void ble_config_service_on_subscribe(uint16_t attr_handle, uint8_t cur_notify) {
@@ -544,6 +577,10 @@ void ble_config_service_stream_tick(void) {
   s.element_id = elems[picked].element_id;
   s.raw = elems[picked].raw;
   s.norm_q15 = clamp_q15(elems[picked].norm_m1_1);
+
+  // Cache for READs.
+  memcpy(g_last_stream_sample_buf, &s, sizeof(s));
+  g_last_stream_valid = true;
 
   struct os_mbuf *om = ble_hs_mbuf_from_flat(&s, sizeof(s));
   if (!om) return;

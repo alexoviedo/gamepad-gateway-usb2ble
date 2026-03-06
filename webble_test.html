@@ -2,18 +2,33 @@
 <html>
 <head>
   <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>HOTAS Bridge WebBLE Test</title>
   <style>
-    body { font-family: sans-serif; padding: 16px; }
+    body { font-family: sans-serif; padding: 16px; max-width: 980px; margin: 0 auto; }
     button { margin: 4px; padding: 8px 12px; }
-    pre { background:#111; color:#0f0; padding: 12px; height: 320px; overflow:auto; }
-    input { width: 420px; }
+    pre { background:#111; color:#0f0; padding: 12px; height: 360px; overflow:auto; white-space: pre-wrap; }
+    input { width: 420px; max-width: 100%; }
+    .note { background:#f5f5f5; padding:10px 12px; border-radius:8px; margin:10px 0 16px; }
+    .warn { color:#a33; }
   </style>
 </head>
 <body>
   <h2>HOTAS Bridge WebBLE Test</h2>
+
+  <div class="note">
+    <div><b>Use CONFIG mode advertiser:</b> <code>HOTAS_CFG</code></div>
+    <div><b>RUN mode advertiser:</b> <code>HOTAS_BRIDGE</code> (HID gamepad only; no WebBLE config service)</div>
+    <div style="margin-top:8px;" class="warn">
+      This page connects by <b>name prefix</b> and requests the Config service as an <b>optional service</b>.
+      That is intentional.
+    </div>
+  </div>
+
   <div>
-    <button id="connect">Connect</button>
+    <button id="connect">Connect (recommended)</button>
+    <button id="connectUuid">Connect (UUID filter debug)</button>
+    <button id="disconnect">Disconnect</button>
     <button id="getDevices">get_devices</button>
     <button id="getDesc">get_descriptor</button>
     <button id="startStream">start_stream</button>
@@ -32,35 +47,38 @@
 const logEl = document.getElementById('log');
 function log(...args){ logEl.textContent += args.join(' ') + "\n"; logEl.scrollTop = logEl.scrollHeight; }
 
-const UUID_SVC = "6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a1";
-const UUID_CMD = "6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a2";
-const UUID_EVT = "6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a3";
-const UUID_STREAM = "6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a4";
+const UUID_SVC    = '6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a1';
+const UUID_CMD    = '6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a2';
+const UUID_EVT    = '6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a3';
+const UUID_STREAM = '6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a4';
 
 let dev, gatt, svc, cmdChr, evtChr, streamChr;
 let rid = 0;
+const evtReasm = new Map();
 
 function u8hex(u8){ return [...u8].map(b=>b.toString(16).padStart(2,'0')).join(''); }
 
 function parseEvtFrame(u8){
-  // version(1), type(1), msg_id(2 LE), offset(2 LE), total_len(2 LE), payload...
   if (u8.length < 8) return null;
-  const version = u8[0];
-  const type = u8[1];
-  const msgId = u8[2] | (u8[3]<<8);
-  const offset = u8[4] | (u8[5]<<8);
-  const total = u8[6] | (u8[7]<<8);
-  const payload = u8.slice(8);
-  return {version,type,msgId,offset,total,payload};
+  return {
+    version: u8[0],
+    type: u8[1],
+    msgId: u8[2] | (u8[3] << 8),
+    offset: u8[4] | (u8[5] << 8),
+    total: u8[6] | (u8[7] << 8),
+    payload: u8.slice(8),
+  };
 }
 
-const evtReasm = new Map(); // msgId -> {total, chunks:[], received}
 function handleEvt(u8){
   const f = parseEvtFrame(u8);
-  if (!f) { log("EVT (short)", u8hex(u8)); return; }
+  if (!f) { log('EVT (short)', u8hex(u8)); return; }
 
   let st = evtReasm.get(f.msgId);
-  if (!st) { st = { total:f.total, buf:new Uint8Array(f.total), got:0, seen:new Set() }; evtReasm.set(f.msgId, st); }
+  if (!st) {
+    st = { total: f.total, buf: new Uint8Array(f.total), got: 0, seen: new Set() };
+    evtReasm.set(f.msgId, st);
+  }
 
   if (!st.seen.has(f.offset)) {
     st.buf.set(f.payload, f.offset);
@@ -69,20 +87,20 @@ function handleEvt(u8){
   }
 
   if (st.got >= st.total) {
-    const full = st.buf;
     evtReasm.delete(f.msgId);
+    const full = st.buf;
 
     if (f.type === 1) {
       const txt = new TextDecoder().decode(full);
-      log("EVT JSON:", txt);
+      log('EVT JSON:', txt);
       try {
         const obj = JSON.parse(txt);
         if (obj.devices && obj.devices.length) {
           document.getElementById('deviceId').value = obj.devices[0].device_id;
         }
-      } catch(e){}
+      } catch (_) {}
     } else if (f.type === 2) {
-      log(`EVT DESCRIPTOR: ${full.length} bytes (hex head):`, u8hex(full.slice(0,32)));
+      log(`EVT DESCRIPTOR: ${full.length} bytes (hex head):`, u8hex(full.slice(0, 32)));
     } else {
       log(`EVT type=${f.type} len=${full.length}`);
     }
@@ -90,83 +108,143 @@ function handleEvt(u8){
 }
 
 function handleStream(u8){
-  // StreamSample packed:
-  // u8 version, u8 flags, u32 device_id, u32 element_id, i32 raw, i16 norm_q15
-  if (u8.length < 16) { log("STREAM short", u8hex(u8)); return; }
-  const dv = new DataView(u8.buffer);
-  const version = dv.getUint8(0);
-  const flags = dv.getUint8(1);
+  if (u8.length < 16) { log('STREAM short', u8hex(u8)); return; }
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const version  = dv.getUint8(0);
+  const flags    = dv.getUint8(1);
   const deviceId = dv.getUint32(2, true);
-  const elementId = dv.getUint32(6, true);
-  const raw = dv.getInt32(10, true);
-  const normQ15 = dv.getInt16(14, true);
-  log(`STREAM v=${version} dev=${deviceId} elem=${elementId} raw=${raw} normQ15=${normQ15}`);
+  const elementId= dv.getUint32(6, true);
+  const raw      = dv.getInt32(10, true);
+  const normQ15  = dv.getInt16(14, true);
+  log(`STREAM v=${version} flags=${flags} dev=${deviceId} elem=${elementId} raw=${raw} normQ15=${normQ15}`);
 }
 
 async function writeCmd(obj){
+  if (!cmdChr) throw new Error('Not connected');
   const json = JSON.stringify(obj);
-  const data = new TextEncoder().encode(json);
-  await cmdChr.writeValue(data);
-  log("CMD->", json);
+  await cmdChr.writeValue(new TextEncoder().encode(json));
+  log('CMD->', json);
+}
+
+function resetHandles(){
+  gatt = null; svc = null; cmdChr = null; evtChr = null; streamChr = null;
+}
+
+function disconnect(){
+  try { if (gatt?.connected) gatt.disconnect(); } catch (_) {}
+  resetHandles();
+}
+
+async function afterConnect(){
+  dev.addEventListener('gattserverdisconnected', () => {
+    log('DISCONNECTED');
+    resetHandles();
+  }, { once: true });
+
+  gatt = await dev.gatt.connect();
+  log('Connected to', dev.name || dev.id);
+
+  try {
+    const svcs = await gatt.getPrimaryServices();
+    const uuids = svcs.map(s => s.uuid).sort();
+    log(`Primary services (${uuids.length}):`, uuids.join(', '));
+  } catch (e) {
+    log('getPrimaryServices() failed:', e.toString());
+  }
+
+  svc = await gatt.getPrimaryService(UUID_SVC);
+  cmdChr = await svc.getCharacteristic(UUID_CMD);
+  evtChr = await svc.getCharacteristic(UUID_EVT);
+  streamChr = await svc.getCharacteristic(UUID_STREAM);
+
+  await evtChr.startNotifications();
+  evtChr.addEventListener('characteristicvaluechanged', (e) => {
+    handleEvt(new Uint8Array(e.target.value.buffer, e.target.value.byteOffset, e.target.value.byteLength));
+  });
+  log('EVT notifications ON');
+
+  await streamChr.startNotifications();
+  streamChr.addEventListener('characteristicvaluechanged', (e) => {
+    handleStream(new Uint8Array(e.target.value.buffer, e.target.value.byteOffset, e.target.value.byteLength));
+  });
+  log('STREAM notifications ON');
+}
+
+async function connectByNamePrefix(){
+  disconnect();
+  dev = await navigator.bluetooth.requestDevice({
+    filters: [
+      { namePrefix: 'HOTAS_CFG' },
+      { namePrefix: 'HOTAS_CONFIG' },
+    ],
+    optionalServices: [UUID_SVC],
+  });
+  await afterConnect();
+}
+
+async function connectByServiceFilter(){
+  disconnect();
+  dev = await navigator.bluetooth.requestDevice({
+    filters: [{ services: [UUID_SVC] }],
+    optionalServices: [UUID_SVC],
+  });
+  await afterConnect();
 }
 
 document.getElementById('connect').onclick = async () => {
   try {
-    dev = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [UUID_SVC] }]
-    });
-    dev.addEventListener('gattserverdisconnected', ()=>log("DISCONNECTED"));
-
-    gatt = await dev.gatt.connect();
-    log("Connected to", dev.name || dev.id);
-
-    svc = await gatt.getPrimaryService(UUID_SVC);
-    cmdChr = await svc.getCharacteristic(UUID_CMD);
-    evtChr = await svc.getCharacteristic(UUID_EVT);
-    streamChr = await svc.getCharacteristic(UUID_STREAM);
-
-    await evtChr.startNotifications();
-    evtChr.addEventListener('characteristicvaluechanged', (e)=>{
-      const u8 = new Uint8Array(e.target.value.buffer);
-      handleEvt(u8);
-    });
-    log("EVT notifications ON");
-
-    await streamChr.startNotifications();
-    streamChr.addEventListener('characteristicvaluechanged', (e)=>{
-      const u8 = new Uint8Array(e.target.value.buffer);
-      handleStream(u8);
-    });
-    log("STREAM notifications ON");
+    await connectByNamePrefix();
   } catch (e) {
-    log("Connect error:", e.toString());
+    log('Connect error:', e.toString());
+    log('Tip: use the CONFIG advertiser HOTAS_CFG. If the picker is empty, make sure Bluetooth is on and reload this page.');
   }
 };
 
+document.getElementById('connectUuid').onclick = async () => {
+  try {
+    await connectByServiceFilter();
+  } catch (e) {
+    log('UUID-filter connect error:', e.toString());
+    log('That usually means the browser did not match the advertised service UUID. Use the regular Connect button instead.');
+  }
+};
+
+document.getElementById('disconnect').onclick = () => disconnect();
+
 document.getElementById('getDevices').onclick = async () => {
-  rid++;
-  await writeCmd({ rid, cmd:"get_devices" });
+  try {
+    rid++;
+    await writeCmd({ rid, cmd: 'get_devices' });
+  } catch (e) { log('get_devices error:', e.toString()); }
 };
 
 document.getElementById('getDesc').onclick = async () => {
-  rid++;
-  const device_id = Number(document.getElementById('deviceId').value || "0");
-  await writeCmd({ rid, cmd:"get_descriptor", device_id });
+  try {
+    rid++;
+    const device_id = Number(document.getElementById('deviceId').value || '0');
+    await writeCmd({ rid, cmd: 'get_descriptor', device_id });
+  } catch (e) { log('get_descriptor error:', e.toString()); }
 };
 
 document.getElementById('startStream').onclick = async () => {
-  rid++;
-  await writeCmd({ rid, cmd:"start_stream" });
+  try {
+    rid++;
+    await writeCmd({ rid, cmd: 'start_stream' });
+  } catch (e) { log('start_stream error:', e.toString()); }
 };
 
 document.getElementById('stopStream').onclick = async () => {
-  rid++;
-  await writeCmd({ rid, cmd:"stop_stream" });
+  try {
+    rid++;
+    await writeCmd({ rid, cmd: 'stop_stream' });
+  } catch (e) { log('stop_stream error:', e.toString()); }
 };
 
 document.getElementById('rebootRun').onclick = async () => {
-  rid++;
-  await writeCmd({ rid, cmd:"reboot_to_run" });
+  try {
+    rid++;
+    await writeCmd({ rid, cmd: 'reboot_to_run' });
+  } catch (e) { log('reboot_to_run error:', e.toString()); }
 };
 </script>
 </body>
