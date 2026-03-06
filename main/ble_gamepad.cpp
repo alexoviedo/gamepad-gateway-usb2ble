@@ -12,7 +12,6 @@ extern "C" {
 #include <esp_nimble_hci.h>
 #include "host/ble_gatt.h"
 #include "host/ble_hs.h"
-#include "host/ble_store.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
 #include "nimble/ble.h"
@@ -21,9 +20,6 @@ extern "C" {
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 }
-
-// Provided by the NimBLE host store config implementation.
-extern "C" void ble_store_config_init(void);
 
 // -----------------------------------------------------------------------------
 // ESP-IDF / NimBLE API compatibility
@@ -177,9 +173,8 @@ static uint8_t g_protocol_mode = 1; // 0=boot, 1=report
 static uint8_t g_hid_ctrl_point = 0;
 static uint8_t g_battery_level = 100;
 
-// HID Information: bcdHID(0x0111), country(0), flags(0x01)
-// Match NimBLEHIDDevice / ESP32-BLE-Gamepad behavior.
-static const uint8_t kHidInfoValue[4] = {0x11, 0x01, 0x00, 0x01};
+// HID Information: bcdHID(0x0111), country(0), flags(0x02)
+static const uint8_t kHidInfoValue[4] = {0x11, 0x01, 0x00, 0x02};
 
 // Report Reference: [ReportID][ReportType]
 static const uint8_t kReportRefValue[2] = {kReportIdGamepad, kReportTypeInput};
@@ -339,7 +334,9 @@ static void build_gatt_db(void) {
     if (cfg && cfg[0].uuid) {
       gatt_svr_svcs[1] = cfg[0];
     } else {
-      ESP_LOGE(TAG, "CONFIG mode requested but ble_config_service_gatt_defs() missing/empty. (Check ble_config_service.cpp exports)");
+      ESP_LOGE(TAG,
+               "CONFIG mode requested but ble_config_service_gatt_defs() missing/empty. "
+               "(Check ble_config_service.cpp exports)");
     }
   } else {
     // Battery (0x180F)
@@ -377,12 +374,12 @@ static void build_gatt_db(void) {
 
     // Report (+ Report Reference)
     g_hid_report_descs[0].uuid = (ble_uuid_t *)&UUID_DSC_REPORT_REF;
-    g_hid_report_descs[0].att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC;
+    g_hid_report_descs[0].att_flags = BLE_ATT_F_READ;
     g_hid_report_descs[0].access_cb = gatt_access_report_ref;
 
     g_hid_chrs[4].uuid = (ble_uuid_t *)&UUID_CHR_REPORT;
     g_hid_chrs[4].access_cb = gatt_access_hid;
-    g_hid_chrs[4].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY;
+    g_hid_chrs[4].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
     g_hid_chrs[4].val_handle = &g_hid_report_handle;
     g_hid_chrs[4].descriptors = g_hid_report_descs;
 
@@ -508,36 +505,74 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
 }
 
 static void ble_advertise(void) {
-  struct ble_hs_adv_fields fields;
-  memset(&fields, 0, sizeof(fields));
+  // Best-effort stop (ignore errors; it may not be advertising).
+  (void)ble_gap_adv_stop();
 
-  fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+  // CONFIG mode uses a 128-bit UUID. Name + flags + UUID can exceed the 31-byte
+  // legacy ADV payload, so try UUID-in-ADV first, then fall back to putting the
+  // UUID in scan response while keeping the name in the primary ADV payload.
+  static const ble_uuid128_t kCfgSvcUuid = BLE_UUID128_INIT(
+      0x90, 0x2d, 0x1a, 0x6b, 0x1c, 0x9c, 0x3f, 0x4a,
+      0xb1, 0xe0, 0x4f, 0xd8, 0xf5, 0xb2, 0xc1, 0xa1);
+  static ble_uuid128_t kCfgSvcUuids128[] = {kCfgSvcUuid};
+
+  struct ble_hs_adv_fields adv_fields;
+  memset(&adv_fields, 0, sizeof(adv_fields));
+
+  adv_fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
 
   const char *name = ble_svc_gap_device_name();
-  fields.name = (uint8_t *)name;
-  fields.name_len = strlen(name);
-  fields.name_is_complete = 1;
+  adv_fields.name = (uint8_t *)name;
+  adv_fields.name_len = strlen(name);
+  adv_fields.name_is_complete = 1;
 
   if (g_is_config_mode) {
-    static const ble_uuid128_t kCfgSvcUuid = BLE_UUID128_INIT(
-        0x90, 0x2d, 0x1a, 0x6b, 0x1c, 0x9c, 0x3f, 0x4a,
-        0xb1, 0xe0, 0x4f, 0xd8, 0xf5, 0xb2, 0xc1, 0xa1);
-    static ble_uuid128_t uuids128[] = {kCfgSvcUuid};
-    fields.uuids128 = uuids128;
-    fields.num_uuids128 = (uint8_t)(sizeof(uuids128) / sizeof(uuids128[0]));
-    fields.uuids128_is_complete = 1;
+    adv_fields.uuids128 = kCfgSvcUuids128;
+    adv_fields.num_uuids128 = (uint8_t)(sizeof(kCfgSvcUuids128) / sizeof(kCfgSvcUuids128[0]));
+    adv_fields.uuids128_is_complete = 1;
   } else {
-    fields.appearance = kAppearanceHidGamepad;
+    adv_fields.appearance = kAppearanceHidGamepad;
     static ble_uuid16_t uuids16[] = {BLE_UUID16_INIT(0x1812), BLE_UUID16_INIT(0x180F)};
-    fields.uuids16 = uuids16;
-    fields.num_uuids16 = (uint8_t)(sizeof(uuids16) / sizeof(uuids16[0]));
-    fields.uuids16_is_complete = 1;
+    adv_fields.uuids16 = uuids16;
+    adv_fields.num_uuids16 = (uint8_t)(sizeof(uuids16) / sizeof(uuids16[0]));
+    adv_fields.uuids16_is_complete = 1;
   }
 
-  int rc = ble_gap_adv_set_fields(&fields);
+  bool cfg_uuid_in_adv = g_is_config_mode;
+
+  int rc = ble_gap_adv_set_fields(&adv_fields);
+  if (rc != 0 && g_is_config_mode) {
+    cfg_uuid_in_adv = false;
+    adv_fields.uuids128 = nullptr;
+    adv_fields.num_uuids128 = 0;
+    adv_fields.uuids128_is_complete = 0;
+    rc = ble_gap_adv_set_fields(&adv_fields);
+  }
   if (rc != 0) {
     ESP_LOGE(TAG, "ble_gap_adv_set_fields failed: %d", rc);
     return;
+  }
+
+  if (g_is_config_mode) {
+    struct ble_hs_adv_fields rsp_fields;
+    memset(&rsp_fields, 0, sizeof(rsp_fields));
+
+    if (!cfg_uuid_in_adv) {
+      rsp_fields.uuids128 = kCfgSvcUuids128;
+      rsp_fields.num_uuids128 = (uint8_t)(sizeof(kCfgSvcUuids128) / sizeof(kCfgSvcUuids128[0]));
+      rsp_fields.uuids128_is_complete = 1;
+    }
+
+    rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
+    if (rc != 0) {
+      ESP_LOGE(TAG, "ble_gap_adv_rsp_set_fields failed: %d", rc);
+      return;
+    }
+  } else {
+    // Clear scan response in RUN mode so CONFIG fields don't linger.
+    struct ble_hs_adv_fields empty_rsp;
+    memset(&empty_rsp, 0, sizeof(empty_rsp));
+    (void)ble_gap_adv_rsp_set_fields(&empty_rsp);
   }
 
   struct ble_gap_adv_params adv_params;
@@ -590,14 +625,11 @@ static void ble_common_init(bool config_mode) {
       ESP_LOGE(TAG, "esp_nimble_hci_and_controller_init failed: %s", esp_err_to_name(rc));
     }
   } else {
-    ESP_LOGW(TAG, "esp_nimble_hci_and_controller_init not linked; continuing without explicit HCI init");
+    ESP_LOGW(TAG,
+             "esp_nimble_hci_and_controller_init not linked; continuing without explicit HCI init");
   }
 
   nimble_port_init();
-
-  // Bond / key / CCCD persistence for NimBLE security procedures.
-  ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
-  ble_store_config_init();
 
   ble_svc_gap_init();
   ble_svc_gatt_init();
@@ -624,7 +656,8 @@ static void ble_common_init(bool config_mode) {
     return;
   }
 
-  // Match the working ESP32-BLE-Gamepad security posture.
+  // Security: match the known-good gamepad behavior (bonding allowed,
+  // no required encryption on reads).
   ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
   ble_hs_cfg.sm_bonding = 1;
   ble_hs_cfg.sm_mitm = 0;
