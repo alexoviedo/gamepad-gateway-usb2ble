@@ -106,6 +106,11 @@ static GamepadInputReport g_last_report = {
 // - 8 axes (X,Y,Z,Rx,Ry,Rz,Slider,Slider)
 // - 1 hat switch (8-bit, Null State)
 // Axes are unsigned 0..32767.
+//
+// NOTE:
+// The HID Report characteristic value and notifications should contain only the
+// report payload. The Report ID association is carried by the Report Reference
+// descriptor (0x2908).
 static const uint8_t kHidReportMap[] = {
     0x05, 0x01,             // Usage Page (Generic Desktop)
     0x09, 0x05,             // Usage (Game Pad)
@@ -394,32 +399,34 @@ static void build_gatt_db(void) {
 static void ble_advertise(void);
 
 static void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *) {
+  char uuid_str[BLE_UUID_STR_LEN] = {0};
+
   switch (ctxt->op) {
-  case BLE_GATT_REGISTER_OP_SVC: {
-    uint16_t u16 = 0;
+  case BLE_GATT_REGISTER_OP_SVC:
     if (ctxt->svc.svc_def && ctxt->svc.svc_def->uuid) {
-      u16 = ble_uuid_u16(ctxt->svc.svc_def->uuid);
+      ble_uuid_to_str(ctxt->svc.svc_def->uuid, uuid_str);
     }
-    ESP_LOGI(TAG, "GATT REG SVC 0x%04x -> handle=%d", u16, (int)ctxt->svc.handle);
+    ESP_LOGI(TAG, "GATT REG SVC %s -> handle=%d", uuid_str[0] ? uuid_str : "(null)",
+             (int)ctxt->svc.handle);
     break;
-  }
-  case BLE_GATT_REGISTER_OP_CHR: {
-    uint16_t u16 = 0;
+
+  case BLE_GATT_REGISTER_OP_CHR:
     if (ctxt->chr.chr_def && ctxt->chr.chr_def->uuid) {
-      u16 = ble_uuid_u16(ctxt->chr.chr_def->uuid);
+      ble_uuid_to_str(ctxt->chr.chr_def->uuid, uuid_str);
     }
-    ESP_LOGI(TAG, "GATT REG CHR 0x%04x -> def_handle=%d val_handle=%d", u16,
+    ESP_LOGI(TAG, "GATT REG CHR %s -> def_handle=%d val_handle=%d",
+             uuid_str[0] ? uuid_str : "(null)",
              (int)ctxt->chr.def_handle, (int)ctxt->chr.val_handle);
     break;
-  }
-  case BLE_GATT_REGISTER_OP_DSC: {
-    uint16_t u16 = 0;
+
+  case BLE_GATT_REGISTER_OP_DSC:
     if (ctxt->dsc.dsc_def && ctxt->dsc.dsc_def->uuid) {
-      u16 = ble_uuid_u16(ctxt->dsc.dsc_def->uuid);
+      ble_uuid_to_str(ctxt->dsc.dsc_def->uuid, uuid_str);
     }
-    ESP_LOGI(TAG, "GATT REG DSC 0x%04x -> handle=%d", u16, (int)ctxt->dsc.handle);
+    ESP_LOGI(TAG, "GATT REG DSC %s -> handle=%d", uuid_str[0] ? uuid_str : "(null)",
+             (int)ctxt->dsc.handle);
     break;
-  }
+
   default:
     break;
   }
@@ -496,8 +503,8 @@ static void ble_advertise(void) {
   // We therefore *try* to include the 128-bit UUID in ADV first, and fall back to
   // putting it in scan response if the ADV payload is rejected.
   static const ble_uuid128_t kCfgSvcUuid = BLE_UUID128_INIT(
-      0x90, 0x2d, 0x1a, 0x6b, 0x1c, 0x9c, 0x3f, 0x4a,
-      0xb1, 0xe0, 0x4f, 0xd8, 0xf5, 0xb2, 0xc1, 0xa1);
+      0xa1, 0xc1, 0xb2, 0xf5, 0xd8, 0x4f, 0xe0, 0xb1,
+      0x3f, 0x4a, 0x1c, 0x9c, 0x90, 0x2d, 0x1a, 0x6b);
   static ble_uuid128_t kCfgSvcUuids128[] = {kCfgSvcUuid};
 
   struct ble_hs_adv_fields adv_fields;
@@ -630,9 +637,6 @@ static void ble_common_init(bool config_mode) {
     // confusion in Web Bluetooth pickers and OS device lists.
     ble_svc_gap_device_name_set("HOTAS_CFG");
     ble_svc_gap_device_appearance_set(0);
-
-    // If the real config service isn't linked, this will just be the weak no-op
-    // and we'll log loudly when gatt_defs() is missing.
     ble_config_service_init();
   } else {
     ble_svc_gap_device_name_set("HOTAS_BRIDGE");

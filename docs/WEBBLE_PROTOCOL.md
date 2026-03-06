@@ -153,3 +153,19 @@ Max size: 4096 bytes.
   - Include the service UUID in `filters: [{ services: [UUID] }]` and/or `optionalServices: [UUID]`.
 - If Chrome previously connected to the device without requesting the Config UUID, it may cache a permission grant that does not include it.
   - Fix by removing/forgetting the device from the site's Bluetooth permissions (or clearing site data) and reconnecting.
+
+
+## Browser / testing notes
+
+- Use the **CONFIG** advertiser: `HOTAS_CFG`.
+- Serve the test page from a secure context such as `http://localhost`.
+- When using Web Bluetooth, request the config service UUID as an allowed service.
+  - Name-based discovery with `optionalServices: [UUID_SVC]` is the most forgiving path during development.
+  - UUID-filter discovery should also work once the firmware advertises the 128-bit service UUID correctly.
+- If Chrome previously cached an older permission grant for the device, remove the saved Bluetooth permission for the page and reconnect.
+- Expected CONFIG-mode flow:
+  1. Connect to `HOTAS_CFG`
+  2. Subscribe to `EVT`
+  3. Subscribe to `STREAM`
+  4. Write `{"cmd":"get_devices"}` to `CMD`
+  5. Optionally write `{"cmd":"start_stream"}` to begin 60 Hz samples
