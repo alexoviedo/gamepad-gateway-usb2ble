@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HOTAS Bridge Config</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">ESP32 Config Service</p>
+          <h1>HOTAS Bridge WebBLE Console</h1>
+          <p class="hero-copy">
+            Connect directly from Chrome to the ESP32 in <strong>CONFIG</strong> mode,
+            inspect discovered HID devices, view raw report descriptors, and watch live
+            telemetry streaming in near real time.
+          </p>
+        </div>
+        <div class="hero-status card compact">
+          <div class="status-row">
+            <span class="label">Mode</span>
+            <span class="pill accent">Client-side only</span>
+          </div>
+          <div class="status-row">
+            <span class="label">Transport</span>
+            <span class="pill">Web Bluetooth</span>
+          </div>
+          <div class="status-row">
+            <span class="label">Service UUID</span>
+            <code id="serviceUuidText" class="uuid-text"></code>
+          </div>
+        </div>
+      </header>
+
+      <main class="grid">
+        <section class="card span-12 controls-card">
+          <div class="section-head">
+            <div>
+              <h2>Connection</h2>
+              <p>Use Chrome or Edge on a secure context such as <code>http://localhost</code>.</p>
+            </div>
+            <div class="status-cluster">
+              <span id="connBadge" class="pill warn">Disconnected</span>
+              <span id="streamBadge" class="pill muted">Stream idle</span>
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <button id="connectBtn" class="btn btn-primary">Connect</button>
+            <button id="reconnectBtn" class="btn" disabled>Reconnect</button>
+            <button id="disconnectBtn" class="btn" disabled>Disconnect</button>
+            <button id="refreshDevicesBtn" class="btn" disabled>Refresh Devices</button>
+            <button id="readConfigBtn" class="btn" disabled>Read CFG</button>
+            <button id="startStreamBtn" class="btn" disabled>Start Stream</button>
+            <button id="stopStreamBtn" class="btn" disabled>Stop Stream</button>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-item">
+              <span class="label">Device</span>
+              <span id="deviceName">—</span>
+            </div>
+            <div class="meta-item">
+              <span class="label">GATT</span>
+              <span id="gattState">Not connected</span>
+            </div>
+            <div class="meta-item">
+              <span class="label">EVT notifications</span>
+              <span id="evtState">Off</span>
+            </div>
+            <div class="meta-item">
+              <span class="label">STREAM notifications</span>
+              <span id="streamState">Off</span>
+            </div>
+          </div>
+
+          <div id="errorBanner" class="banner hidden"></div>
+        </section>
+
+        <section class="card span-4">
+          <div class="section-head">
+            <div>
+              <h2>Devices</h2>
+              <p>Returned from <code>get_devices</code>.</p>
+            </div>
+            <span id="deviceCount" class="pill muted">0 devices</span>
+          </div>
+          <div id="deviceList" class="device-list empty-state">
+            Connect and request devices to populate this list.
+          </div>
+        </section>
+
+        <section class="card span-8 descriptor-card">
+          <div class="section-head">
+            <div>
+              <h2>Descriptor Viewer</h2>
+              <p>Raw HID report descriptor bytes for the selected device.</p>
+            </div>
+            <div class="toolbar tight">
+              <button id="loadDescriptorBtn" class="btn" disabled>Load Descriptor</button>
+              <button id="copyDescriptorBtn" class="btn" disabled>Copy Hex</button>
+              <button id="downloadDescriptorBtn" class="btn" disabled>Download .bin</button>
+            </div>
+          </div>
+
+          <div class="descriptor-meta" id="descriptorMeta">
+            Select a device card to inspect its descriptor.
+          </div>
+          <pre id="descriptorHex" class="code-panel empty-state">No descriptor loaded yet.</pre>
+        </section>
+
+        <section class="card span-5 telemetry-card">
+          <div class="section-head">
+            <div>
+              <h2>Live Telemetry</h2>
+              <p>Incoming <code>STREAM</code> samples and latest changing element.</p>
+            </div>
+            <span id="sampleRateBadge" class="pill muted">No samples yet</span>
+          </div>
+
+          <div class="latest-sample" id="latestSample">
+            <div class="latest-row"><span class="label">Element</span><span>—</span></div>
+            <div class="latest-row"><span class="label">Raw</span><span>—</span></div>
+            <div class="latest-row"><span class="label">Normalized</span><span>—</span></div>
+            <div class="latest-row"><span class="label">Updated</span><span>—</span></div>
+          </div>
+
+          <div id="telemetryList" class="telemetry-list empty-state">
+            Start stream to see live samples.
+          </div>
+        </section>
+
+        <section class="card span-7">
+          <div class="section-head">
+            <div>
+              <h2>Activity Log</h2>
+              <p>Connection lifecycle, command responses, and recoverable errors.</p>
+            </div>
+            <button id="clearLogBtn" class="btn">Clear</button>
+          </div>
+          <pre id="logPanel" class="log-panel"></pre>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

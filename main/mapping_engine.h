@@ -35,11 +35,8 @@ enum class OutputAxis : uint8_t {
 // Currently derived from HidDeviceContext::dev_addr (a per-connection handle tag).
 using DeviceId = uint32_t;
 
-// ElementId must match InputElement::element_id exactly.
-// InputElement uses a 32-bit stable hash, so truncating to 16 bits breaks
-// mapped axis/hat lookup while buttons still appear to work (because buttons are
-// OR-combined separately from the mapping engine).
-using ElementId = uint32_t;
+// ElementId is stable within a device (assigned by the report descriptor parser).
+using ElementId = uint16_t;
 
 struct AxisSource {
   DeviceId device_id = 0;

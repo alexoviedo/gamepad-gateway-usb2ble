@@ -11,7 +11,7 @@ static const char *TAG = "MAP_ENG";
 
 // Reserved virtual element ids (not present in descriptor).
 // These allow deterministic single-source mappings for simple composites.
-static constexpr ElementId kVirtualToeBrakeMax = 0xFFFFFFFFu;
+static constexpr ElementId kVirtualToeBrakeMax = 0xFFFF;
 
 static MappingProfile g_profile;
 static bool g_profile_dirty = true;
