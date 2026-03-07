@@ -12,6 +12,7 @@ extern "C" {
 #include <esp_nimble_hci.h>
 #include "host/ble_gatt.h"
 #include "host/ble_hs.h"
+#include "host/ble_store.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
 #include "nimble/ble.h"
@@ -21,11 +22,12 @@ extern "C" {
 #include "services/gatt/ble_svc_gatt.h"
 }
 
+// Provided by the NimBLE host store config implementation.
+extern "C" void ble_store_config_init(void);
+
 // -----------------------------------------------------------------------------
 // ESP-IDF / NimBLE API compatibility
 // -----------------------------------------------------------------------------
-// Some ESP-IDF variants don't link esp_nimble_hci_and_controller_init()
-// even if the header is present. Declare as weak so builds don't fail.
 extern "C" esp_err_t esp_nimble_hci_and_controller_init(void) __attribute__((weak));
 extern "C" esp_err_t esp_nimble_hci_and_controller_deinit(void) __attribute__((weak));
 
@@ -39,70 +41,32 @@ static bool g_is_config_mode = false;
 static constexpr uint16_t kAppearanceHidGamepad = 0x03C4;
 
 // --------------------------
-// HID Report (match ESP32-BLE-Gamepad defaults)
+// HID report format
 // --------------------------
-//
-// ESP32-BLE-Gamepad default axes range is 0..32767 (0x7FFF), hats are 0=center,
-// 1..8 directions with Null State enabled.
-//
-// IMPORTANT:
-// Even though the report map contains a Report ID, HOGP "Report" characteristic
-// values generally do NOT include the Report ID byte. The Report Reference
-// descriptor (0x2908) tells the host which report ID this characteristic is.
-//
-// The wire format here intentionally mirrors the payload-only behavior used by
-// ESP32-BLE-Gamepad and NimBLEHIDDevice input reports.
-
+// Match ESP32-BLE-Gamepad axis ordering on the wire:
+// buttons, X, Y, Z, Rz, Rx, Ry, Slider1, Slider2, Hat
 static constexpr uint8_t kReportIdGamepad = 0x03;
 static constexpr uint8_t kReportTypeInput = 0x01; // HOGP: 1=input
+static constexpr size_t kInputReportSize = 21;
 
-// Our internal USB->normalized state uses -32767..32767.
-// Convert to 0..32767 like ESP32-BLE-Gamepad.
+static uint8_t g_last_report[kInputReportSize] = {0};
+
 static inline uint16_t to_u16_axis(int16_t v) {
   int32_t t = (int32_t)v + 32768;
   if (t < 0) t = 0;
   if (t > 65535) t = 65535;
-  return (uint16_t)(t >> 1);
+  return (uint16_t)(t >> 1); // 0..32767
 }
 
 static inline uint8_t clamp_hat(uint8_t hat) {
-  if (hat <= 8) return hat;
-  return 0;
+  return (hat <= 8) ? hat : 0;
 }
 
-struct __attribute__((packed)) GamepadInputReport {
-  uint32_t buttons; // 32 buttons, 1 bit each
-  uint16_t x;
-  uint16_t y;
-  uint16_t z;
-  uint16_t rx;
-  uint16_t ry;
-  uint16_t rz;
-  uint16_t slider1;
-  uint16_t slider2;
-  uint8_t hat; // 0=center (null), 1..8 directions
-};
+static inline void put_u16_le(uint8_t *dst, uint16_t v) {
+  dst[0] = (uint8_t)(v & 0xFF);
+  dst[1] = (uint8_t)((v >> 8) & 0xFF);
+}
 
-static GamepadInputReport g_last_report = {
-    .buttons = 0,
-    .x = 0,
-    .y = 0,
-    .z = 0,
-    .rx = 0,
-    .ry = 0,
-    .rz = 0,
-    .slider1 = 0,
-    .slider2 = 0,
-    .hat = 0,
-};
-
-// HID Report Map:
-// - Generic Desktop / Game Pad
-// - Report ID 3
-// - 32 buttons
-// - 8 axes (X,Y,Z,Rx,Ry,Rz,Slider,Slider)
-// - 1 hat switch (8-bit, Null State)
-// Axes are unsigned 0..32767.
 static const uint8_t kHidReportMap[] = {
     0x05, 0x01,             // Usage Page (Generic Desktop)
     0x09, 0x05,             // Usage (Game Pad)
@@ -119,25 +83,25 @@ static const uint8_t kHidReportMap[] = {
     0x95, 0x20, //   Report Count (32)
     0x81, 0x02, //   Input (Data,Var,Abs)
 
-    // Axes (8 x uint16) - Physical collection
+    // Axes (8 x uint16)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x26, 0xFF, 0x7F, //   Logical Maximum (32767)
+    0x75, 0x10,       //   Report Size (16)
+    0x95, 0x08,       //   Report Count (8)
     0xA1, 0x00,       //   Collection (Physical)
     0x05, 0x01,       //     Usage Page (Generic Desktop)
-    0x15, 0x00,       //     Logical Minimum (0)
-    0x26, 0xFF, 0x7F, //     Logical Maximum (32767)
-    0x75, 0x10,       //     Report Size (16)
-    0x95, 0x08,       //     Report Count (8)
     0x09, 0x30,       //     Usage (X)
     0x09, 0x31,       //     Usage (Y)
     0x09, 0x32,       //     Usage (Z)
+    0x09, 0x35,       //     Usage (Rz)
     0x09, 0x33,       //     Usage (Rx)
     0x09, 0x34,       //     Usage (Ry)
-    0x09, 0x35,       //     Usage (Rz)
     0x09, 0x36,       //     Usage (Slider)
     0x09, 0x36,       //     Usage (Slider)
     0x81, 0x02,       //     Input (Data,Var,Abs)
     0xC0,             //   End Collection
 
-    // Hat switch (1) - 8-bit with Null State (center = 0)
+    // Hat switch
     0x05, 0x01,       //   Usage Page (Generic Desktop)
     0x09, 0x39,       //   Usage (Hat switch)
     0x15, 0x01,       //   Logical Minimum (1)
@@ -154,14 +118,12 @@ static const uint8_t kHidReportMap[] = {
 };
 
 // --------------------------
-// GATT State
+// GATT state
 // --------------------------
-
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool g_ble_connected = false;
 static uint8_t g_own_addr_type = BLE_OWN_ADDR_PUBLIC;
 
-// Characteristic handles we notify/read
 static uint16_t g_hid_report_handle = 0;
 static uint16_t g_battery_level_handle = 0;
 
@@ -257,8 +219,8 @@ static int gatt_access_hid(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt
   case 0x2A4A: // HID Information
     return gatt_read_bytes(ctxt, kHidInfoValue, sizeof(kHidInfoValue));
 
-  case 0x2A4D: // Report (Input)
-    return gatt_read_bytes(ctxt, &g_last_report, sizeof(g_last_report));
+  case 0x2A4D: // Input Report
+    return gatt_read_bytes(ctxt, g_last_report, sizeof(g_last_report));
 
   default:
     return BLE_ATT_ERR_UNLIKELY;
@@ -269,14 +231,14 @@ static int gatt_access_report_ref(uint16_t, uint16_t, struct ble_gatt_access_ctx
   return gatt_read_bytes(ctxt, kReportRefValue, sizeof(kReportRefValue));
 }
 
-static int gatt_access_ext_report_ref(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt, void *) {
+static int gatt_access_ext_report_ref(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt,
+                                      void *) {
   return gatt_read_bytes(ctxt, kExtReportRefValue, sizeof(kExtReportRefValue));
 }
 
 // ---------------------------------------------------------------------------
-// GATT database (C++-safe static storage)
+// GATT database
 // ---------------------------------------------------------------------------
-
 static const ble_uuid16_t UUID_SVC_DEVINFO = BLE_UUID16_INIT(0x180A);
 static const ble_uuid16_t UUID_CHR_MFG_NAME = BLE_UUID16_INIT(0x2A29);
 static const ble_uuid16_t UUID_CHR_MODEL_NUM = BLE_UUID16_INIT(0x2A24);
@@ -297,11 +259,9 @@ static const ble_uuid16_t UUID_DSC_REPORT_REF = BLE_UUID16_INIT(0x2908);
 
 static ble_gatt_dsc_def g_report_map_descs[2];
 static ble_gatt_dsc_def g_hid_report_descs[2];
-
 static ble_gatt_chr_def g_devinfo_chrs[4];
 static ble_gatt_chr_def g_bas_chrs[2];
 static ble_gatt_chr_def g_hid_chrs[6];
-
 static ble_gatt_svc_def gatt_svr_svcs[4];
 
 static void build_gatt_db(void) {
@@ -312,7 +272,7 @@ static void build_gatt_db(void) {
   memset(g_hid_chrs, 0, sizeof(g_hid_chrs));
   memset(gatt_svr_svcs, 0, sizeof(gatt_svr_svcs));
 
-  // Device Information (0x180A)
+  // Device Information Service
   g_devinfo_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_MFG_NAME;
   g_devinfo_chrs[0].access_cb = gatt_access_dis;
   g_devinfo_chrs[0].flags = BLE_GATT_CHR_F_READ;
@@ -334,12 +294,10 @@ static void build_gatt_db(void) {
     if (cfg && cfg[0].uuid) {
       gatt_svr_svcs[1] = cfg[0];
     } else {
-      ESP_LOGE(TAG,
-               "CONFIG mode requested but ble_config_service_gatt_defs() missing/empty. "
-               "(Check ble_config_service.cpp exports)");
+      ESP_LOGE(TAG, "CONFIG mode requested but ble_config_service_gatt_defs() missing/empty.");
     }
   } else {
-    // Battery (0x180F)
+    // Battery Service
     g_bas_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_BATTERY_LEVEL;
     g_bas_chrs[0].access_cb = gatt_access_battery;
     g_bas_chrs[0].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
@@ -349,7 +307,7 @@ static void build_gatt_db(void) {
     gatt_svr_svcs[1].uuid = (ble_uuid_t *)&UUID_SVC_BAS;
     gatt_svr_svcs[1].characteristics = g_bas_chrs;
 
-    // HID (0x1812)
+    // HID Service
     g_hid_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_PROTOCOL_MODE;
     g_hid_chrs[0].access_cb = gatt_access_hid;
     g_hid_chrs[0].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP;
@@ -372,7 +330,7 @@ static void build_gatt_db(void) {
     g_hid_chrs[3].access_cb = gatt_access_hid;
     g_hid_chrs[3].flags = BLE_GATT_CHR_F_WRITE_NO_RSP;
 
-    // Report (+ Report Reference)
+    // Input Report (+ Report Reference)
     g_hid_report_descs[0].uuid = (ble_uuid_t *)&UUID_DSC_REPORT_REF;
     g_hid_report_descs[0].att_flags = BLE_ATT_F_READ;
     g_hid_report_descs[0].access_cb = gatt_access_report_ref;
@@ -392,7 +350,6 @@ static void build_gatt_db(void) {
 // ---------------------------------------------------------------------------
 // GAP / Advertising
 // ---------------------------------------------------------------------------
-
 static void ble_advertise(void);
 
 static void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *) {
@@ -456,6 +413,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
     if (g_is_config_mode) {
       ble_config_service_on_disconnect();
     }
+
     ble_advertise();
     return 0;
 
@@ -482,7 +440,6 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
   case BLE_GAP_EVENT_ENC_CHANGE: {
     struct ble_gap_conn_desc desc;
     memset(&desc, 0, sizeof(desc));
-
     int rc = ble_gap_conn_find(event->enc_change.conn_handle, &desc);
     if (rc == 0) {
       ESP_LOGI(TAG,
@@ -492,9 +449,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
                desc.sec_state.bonded,
                desc.sec_state.key_size);
     } else {
-      ESP_LOGI(TAG,
-               "Encryption changed; status=%d (conn desc unavailable rc=%d)",
-               event->enc_change.status, rc);
+      ESP_LOGI(TAG, "Encryption changed; status=%d", event->enc_change.status);
     }
     return 0;
   }
@@ -505,12 +460,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
 }
 
 static void ble_advertise(void) {
-  // Best-effort stop (ignore errors; it may not be advertising).
   (void)ble_gap_adv_stop();
 
-  // CONFIG mode uses a 128-bit UUID. Name + flags + UUID can exceed the 31-byte
-  // legacy ADV payload, so try UUID-in-ADV first, then fall back to putting the
-  // UUID in scan response while keeping the name in the primary ADV payload.
   static const ble_uuid128_t kCfgSvcUuid = BLE_UUID128_INIT(
       0x90, 0x2d, 0x1a, 0x6b, 0x1c, 0x9c, 0x3f, 0x4a,
       0xb1, 0xe0, 0x4f, 0xd8, 0xf5, 0xb2, 0xc1, 0xa1);
@@ -569,7 +520,6 @@ static void ble_advertise(void) {
       return;
     }
   } else {
-    // Clear scan response in RUN mode so CONFIG fields don't linger.
     struct ble_hs_adv_fields empty_rsp;
     memset(&empty_rsp, 0, sizeof(empty_rsp));
     (void)ble_gap_adv_rsp_set_fields(&empty_rsp);
@@ -631,6 +581,10 @@ static void ble_common_init(bool config_mode) {
 
   nimble_port_init();
 
+  // Persist bonds / CCCDs so Windows keeps the relationship stable.
+  ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+  ble_store_config_init();
+
   ble_svc_gap_init();
   ble_svc_gatt_init();
 
@@ -650,14 +604,15 @@ static void ble_common_init(bool config_mode) {
     ESP_LOGE(TAG, "ble_gatts_count_cfg failed: %d", rc);
     return;
   }
+
   rc = ble_gatts_add_svcs(gatt_svr_svcs);
   if (rc != 0) {
     ESP_LOGE(TAG, "ble_gatts_add_svcs failed: %d", rc);
     return;
   }
 
-  // Security: match the known-good gamepad behavior (bonding allowed,
-  // no required encryption on reads).
+  // Match the working security posture: bondable, no MITM, no SC, and no
+  // characteristic-level read encryption requirement on the input report.
   ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
   ble_hs_cfg.sm_bonding = 1;
   ble_hs_cfg.sm_mitm = 0;
@@ -675,7 +630,8 @@ static void ble_common_init(bool config_mode) {
   } else {
     ESP_LOGI(TAG,
              "BLE HID gamepad initialized (ReportID=%u, report=%u bytes, map=%u bytes)",
-             (unsigned)kReportIdGamepad, (unsigned)sizeof(GamepadInputReport),
+             (unsigned)kReportIdGamepad,
+             (unsigned)kInputReportSize,
              (unsigned)sizeof(kHidReportMap));
   }
 }
@@ -699,28 +655,38 @@ void ble_gamepad_send_state(const GamepadState *s) {
     return;
   }
 
-  GamepadInputReport next = {
-      .buttons = s->buttons,
-      .x = to_u16_axis(s->x),
-      .y = to_u16_axis(s->y),
-      .z = to_u16_axis(s->z),
-      .rx = to_u16_axis(s->rx),
-      .ry = to_u16_axis(s->ry),
-      .rz = to_u16_axis(s->rz),
-      .slider1 = to_u16_axis(s->slider1),
-      .slider2 = to_u16_axis(s->slider2),
-      .hat = clamp_hat((uint8_t)s->hat),
-  };
+  uint8_t next[kInputReportSize];
+  memset(next, 0, sizeof(next));
 
-  if (!g_force_send_once && memcmp(&next, &g_last_report, sizeof(next)) == 0) {
+  // Buttons (little-endian 32-bit bitfield)
+  next[0] = (uint8_t)(s->buttons & 0xFF);
+  next[1] = (uint8_t)((s->buttons >> 8) & 0xFF);
+  next[2] = (uint8_t)((s->buttons >> 16) & 0xFF);
+  next[3] = (uint8_t)((s->buttons >> 24) & 0xFF);
+
+  // ESP32-BLE-Gamepad serialization order:
+  // X, Y, Z, Rz, Rx, Ry, Slider1, Slider2
+  put_u16_le(&next[4], to_u16_axis(s->x));
+  put_u16_le(&next[6], to_u16_axis(s->y));
+  put_u16_le(&next[8], to_u16_axis(s->z));
+  put_u16_le(&next[10], to_u16_axis(s->rz));
+  put_u16_le(&next[12], to_u16_axis(s->rx));
+  put_u16_le(&next[14], to_u16_axis(s->ry));
+  put_u16_le(&next[16], to_u16_axis(s->slider1));
+  put_u16_le(&next[18], to_u16_axis(s->slider2));
+  next[20] = clamp_hat((uint8_t)s->hat);
+
+  if (!g_force_send_once && memcmp(next, g_last_report, sizeof(next)) == 0) {
     return;
   }
-  g_force_send_once = false;
-  g_last_report = next;
 
-  struct os_mbuf *om = ble_hs_mbuf_from_flat(&g_last_report, sizeof(g_last_report));
+  g_force_send_once = false;
+  memcpy(g_last_report, next, sizeof(g_last_report));
+
+  struct os_mbuf *om = ble_hs_mbuf_from_flat(g_last_report, sizeof(g_last_report));
   if (!om) {
     return;
   }
+
   (void)ble_gatts_notify_custom(g_conn_handle, g_hid_report_handle, om);
 }
