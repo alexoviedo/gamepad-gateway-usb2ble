@@ -2,6 +2,7 @@
 #include "input_decoder.h"
 #include "input_elements.h"
 #include "mapping_engine.h"
+#include "nvs_profile_store.h"
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -223,6 +224,22 @@ void hid_device_manager_init(void) {
   memset(&g_merged_state, 0, sizeof(g_merged_state));
   mapping::mapping_engine_init();
 
+  {
+    std::string saved_json;
+    std::string load_error;
+    if (nvs_profile_store::load_json(&saved_json, &load_error)) {
+      std::string apply_error;
+      if (!mapping::mapping_engine_apply_profile_json(saved_json.c_str(), saved_json.size(), &apply_error)) {
+        ESP_LOGW(TAG, "Persisted profile invalid at apply time; falling back to defaults: %s",
+                 apply_error.c_str());
+      } else {
+        ESP_LOGI(TAG, "Applied persisted mapping profile from NVS");
+      }
+    } else if (!load_error.empty() && load_error != "profile not found") {
+      ESP_LOGW(TAG, "Ignoring persisted profile: %s", load_error.c_str());
+    }
+  }
+
   hid_host_driver_config_t driver_config = {.create_background_task = true,
                                             .task_priority = 5,
                                             .stack_size = 8192,
@@ -237,6 +254,13 @@ void hid_device_manager_init(void) {
     ESP_LOGE(TAG, "Failed to install HID Class Driver: %s",
              esp_err_to_name(err));
   }
+}
+
+void hid_device_manager_recompute_mapping(void) {
+  if (!g_state_mutex) return;
+  xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+  mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
+  xSemaphoreGive(g_state_mutex);
 }
 
 void hid_device_manager_get_merged_state(struct GamepadState *out_state) {

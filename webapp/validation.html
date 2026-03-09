@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HOTAS Bridge Validation Scene</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./validation.css" />
+  </head>
+  <body>
+    <div class="app-shell validation-shell">
+      <header class="hero validation-hero validation-hero--compact">
+        <div class="validation-hero-copy">
+          <p class="eyebrow">Calibration / Test</p>
+          <div class="validation-hero-row">
+            <div>
+              <h1>HOTAS Bridge Validation Scene</h1>
+              <p class="hero-copy validation-copy">
+                Validate mapped outputs in <strong>CONFIG</strong> mode with a centered
+                virtual test bench, live readouts, and direct save / reboot controls.
+              </p>
+            </div>
+            <a class="btn validation-link-btn" href="./index.html">Open Config Console</a>
+          </div>
+        </div>
+
+        <div class="hero-status card compact validation-status-card">
+          <div class="status-row">
+            <span class="label">Renderer</span>
+            <span class="pill accent">Three.js / WebGL</span>
+          </div>
+          <div class="status-row">
+            <span class="label">Data source</span>
+            <span class="pill">Mapped output preview</span>
+          </div>
+          <div class="status-row">
+            <span class="label">Mode</span>
+            <span id="modeBadge" class="pill muted">Awaiting connection</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="grid validation-grid validation-grid--reworked">
+        <section class="card span-12 controls-card controls-card--refined">
+          <div class="section-head compact-head">
+            <div>
+              <h2>Connection & Device Actions</h2>
+              <p>
+                Use Chrome or Edge on <code>http://localhost</code> while the ESP32 is in
+                <strong>CONFIG</strong> mode.
+              </p>
+            </div>
+            <div class="status-cluster horizontal status-cluster--tight">
+              <span id="connBadge" class="pill warn">Disconnected</span>
+              <span id="streamBadge" class="pill muted">Stream idle</span>
+              <span id="saveBadge" class="pill success">Saved state</span>
+            </div>
+          </div>
+
+          <div class="action-groups">
+            <div class="action-group">
+              <span class="group-label">Connection</span>
+              <div class="toolbar toolbar--flush">
+                <button id="connectBtn" class="btn btn-primary">Connect</button>
+                <button id="reconnectBtn" class="btn" disabled>Reconnect</button>
+                <button id="disconnectBtn" class="btn" disabled>Disconnect</button>
+              </div>
+            </div>
+
+            <div class="action-group">
+              <span class="group-label">Session</span>
+              <div class="toolbar toolbar--flush">
+                <button id="refreshConfigBtn" class="btn" disabled>Refresh Config</button>
+                <button id="startStreamBtn" class="btn" disabled>Start Stream</button>
+              </div>
+            </div>
+
+            <div class="action-group">
+              <span class="group-label">Device</span>
+              <div class="toolbar toolbar--flush">
+                <button id="saveBtn" class="btn" disabled>Save to Device</button>
+                <button id="rebootRunBtn" class="btn" disabled>Reboot to Run Mode</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="meta-grid validation-meta-grid">
+            <div class="meta-item">
+              <span class="label">Device</span>
+              <span id="deviceName">—</span>
+            </div>
+            <div class="meta-item">
+              <span class="label">GATT</span>
+              <span id="gattState">Not connected</span>
+            </div>
+            <div class="meta-item">
+              <span class="label">Config</span>
+              <span id="configState">Not loaded</span>
+            </div>
+            <div class="meta-item">
+              <span class="label">Sample rate</span>
+              <span id="sampleRate">No samples yet</span>
+            </div>
+          </div>
+
+          <div id="errorBanner" class="banner hidden"></div>
+        </section>
+
+        <section class="card span-8 scene-card scene-card--reworked">
+          <div class="section-head compact-head scene-card-head">
+            <div>
+              <h2>Validation Bench</h2>
+              <p>
+                A cleaner, centered technical bench focused on fast visual confirmation of
+                stick, throttle, rudder, and toe-brake behavior.
+              </p>
+            </div>
+            <div class="status-cluster horizontal status-cluster--tight">
+              <span class="pill muted">Centered technical bench</span>
+              <span class="pill muted">~60 Hz target</span>
+            </div>
+          </div>
+
+          <div class="scene-frame scene-frame--reworked">
+            <div id="sceneCanvas" class="scene-canvas" aria-label="3D validation scene"></div>
+
+            <div class="scene-anchor scene-anchor--stick">
+              <span class="scene-anchor__label">Stick XY</span>
+              <span class="scene-anchor__meta">Aileron / Elevator</span>
+            </div>
+            <div class="scene-anchor scene-anchor--pedals">
+              <span class="scene-anchor__label">Rudder Pedals</span>
+              <span class="scene-anchor__meta">Yaw + toe brakes</span>
+            </div>
+            <div class="scene-anchor scene-anchor--throttle">
+              <span class="scene-anchor__label">Throttle</span>
+              <span class="scene-anchor__meta">Primary power axis</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="card span-4 inspector-card">
+          <div class="section-head compact-head">
+            <div>
+              <h2>Bench Readouts</h2>
+              <p>Primary validators stay large and readable while secondary controls stay compact.</p>
+            </div>
+          </div>
+
+          <div id="primaryInstrumentGrid" class="instrument-rail instrument-rail--primary"></div>
+
+          <div class="subsection-head">
+            <div>
+              <h3>Secondary Controls</h3>
+              <p>Live previews for twist, aux slider, and the hat switch.</p>
+            </div>
+          </div>
+          <div id="secondaryInstrumentGrid" class="instrument-rail instrument-rail--secondary"></div>
+        </aside>
+
+        <section class="card span-12 summary-card">
+          <div class="section-head compact-head">
+            <div>
+              <h2>Mapped Output Summary</h2>
+              <p>Compact, scan-friendly output cards with current value, source binding, and live activity.</p>
+            </div>
+          </div>
+          <div id="telemetryGrid" class="summary-grid"></div>
+        </section>
+
+        <details class="card span-12 debug-card">
+          <summary class="debug-summary">
+            <div>
+              <h2>Debug & Activity Log</h2>
+              <p>Connection lifecycle, stream status, save events, and reboot actions.</p>
+            </div>
+            <span class="pill muted">Advanced</span>
+          </summary>
+          <div class="debug-actions">
+            <button id="clearLogBtn" class="btn">Clear</button>
+          </div>
+          <pre id="logPanel" class="log-panel"></pre>
+        </details>
+      </main>
+    </div>
+
+    <script type="module" src="./validation.js"></script>
+  </body>
+</html>

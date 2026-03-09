@@ -14,9 +14,12 @@
           <h1>HOTAS Bridge WebBLE Console</h1>
           <p class="hero-copy">
             Connect directly from Chrome to the ESP32 in <strong>CONFIG</strong> mode,
-            inspect discovered HID devices, view raw report descriptors, and watch live
-            telemetry streaming in near real time.
+            inspect discovered HID devices, preview descriptors, watch live telemetry,
+            and run a guided mapping wizard that applies axis mappings immediately in memory.
           </p>
+          <div class="hero-links">
+            <a class="btn" href="./validation.html">Open Validation Scene</a>
+          </div>
         </div>
         <div class="hero-status card compact">
           <div class="status-row">
@@ -41,9 +44,10 @@
               <h2>Connection</h2>
               <p>Use Chrome or Edge on a secure context such as <code>http://localhost</code>.</p>
             </div>
-            <div class="status-cluster">
+            <div class="status-cluster horizontal">
               <span id="connBadge" class="pill warn">Disconnected</span>
               <span id="streamBadge" class="pill muted">Stream idle</span>
+              <span id="configBadge" class="pill success">Saved state</span>
             </div>
           </div>
 
@@ -52,7 +56,8 @@
             <button id="reconnectBtn" class="btn" disabled>Reconnect</button>
             <button id="disconnectBtn" class="btn" disabled>Disconnect</button>
             <button id="refreshDevicesBtn" class="btn" disabled>Refresh Devices</button>
-            <button id="readConfigBtn" class="btn" disabled>Read CFG</button>
+            <button id="readConfigBtn" class="btn" disabled>Read Config</button>
+            <button id="saveProfileBtn" class="btn" disabled>Save Profile</button>
             <button id="startStreamBtn" class="btn" disabled>Start Stream</button>
             <button id="stopStreamBtn" class="btn" disabled>Stop Stream</button>
           </div>
@@ -111,6 +116,62 @@
           <pre id="descriptorHex" class="code-panel empty-state">No descriptor loaded yet.</pre>
         </section>
 
+        <section class="card span-7 wizard-card">
+          <div class="section-head">
+            <div>
+              <h2>Interactive Mapping Wizard</h2>
+              <p>Choose a target output, move only the intended control, then confirm the proposed mapping.</p>
+            </div>
+            <div class="toolbar tight">
+              <select id="targetSelect" class="select"></select>
+              <button id="wizardStartBtn" class="btn btn-primary" disabled>Start Detection</button>
+              <button id="wizardRetryBtn" class="btn" disabled>Retry</button>
+              <button id="wizardConfirmBtn" class="btn" disabled>Confirm Mapping</button>
+            </div>
+          </div>
+
+          <div class="wizard-progress">
+            <div id="wizardProgressFill" class="wizard-progress-fill"></div>
+          </div>
+
+          <div class="wizard-copy">
+            <div class="wizard-prompt-block">
+              <span class="label">Prompt</span>
+              <p id="wizardPrompt">Choose an output and start the guided detector.</p>
+            </div>
+            <div class="wizard-status-block">
+              <span class="label">Status</span>
+              <p id="wizardStatus">Choose an output target and start the guided detector.</p>
+            </div>
+          </div>
+
+          <div class="wizard-panels">
+            <div class="wizard-panel">
+              <span class="label">Detected candidate</span>
+              <div id="wizardDetected" class="wizard-detected">
+                <strong>No candidate yet.</strong>
+                <span class="muted-line">Start detection and move only the intended control.</span>
+              </div>
+            </div>
+            <div class="wizard-panel">
+              <span class="label">Live preview</span>
+              <div id="wizardPreview" class="wizard-preview">
+                <span class="muted-line">Live preview will appear here.</span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="section-head small-gap">
+              <div>
+                <h3>Current mappings</h3>
+                <p>Applied immediately in memory. Save when you want them persisted.</p>
+              </div>
+            </div>
+            <div id="mappingList" class="mapping-list"></div>
+          </div>
+        </section>
+
         <section class="card span-5 telemetry-card">
           <div class="section-head">
             <div>
@@ -132,7 +193,70 @@
           </div>
         </section>
 
-        <section class="card span-7">
+        <section class="card span-12 tune-card">
+          <div class="section-head">
+            <div>
+              <h2>Response Tuning</h2>
+              <p>Edit deadzone, outer clamp, response curve, and EMA smoothing for the selected mapped output.</p>
+            </div>
+            <div class="toolbar tight">
+              <select id="tuneAxisSelect" class="select"></select>
+              <button id="resetModifiersBtn" class="btn">Reset modifiers</button>
+            </div>
+          </div>
+
+          <div class="tune-grid">
+            <div class="tune-panel">
+              <div class="section-head small-gap">
+                <div>
+                  <h3>Bezier response curve</h3>
+                  <p>Drag the control points to shape the input-to-output response.</p>
+                </div>
+                <span id="curveStatus" class="pill muted">Linear</span>
+              </div>
+              <div class="curve-shell">
+                <svg id="curveSvg" class="curve-svg" viewBox="0 0 360 240" aria-label="Bezier curve editor"></svg>
+              </div>
+            </div>
+
+            <div class="tune-panel tune-controls">
+              <div class="modifier-grid">
+                <label class="control-block">
+                  <span>Inner deadzone</span>
+                  <div class="control-row">
+                    <input id="deadzoneInnerRange" type="range" min="0" max="0.5" step="0.005" />
+                    <input id="deadzoneInnerInput" type="number" min="0" max="0.5" step="0.005" />
+                  </div>
+                </label>
+
+                <label class="control-block">
+                  <span>Outer clamp</span>
+                  <div class="control-row">
+                    <input id="outerClampRange" type="range" min="0" max="0.5" step="0.005" />
+                    <input id="outerClampInput" type="number" min="0" max="0.5" step="0.005" />
+                  </div>
+                </label>
+
+                <label class="control-block">
+                  <span>EMA smoothing</span>
+                  <div class="control-row">
+                    <input id="smoothingRange" type="range" min="0" max="1" step="0.01" />
+                    <input id="smoothingInput" type="number" min="0" max="1" step="0.01" />
+                  </div>
+                </label>
+              </div>
+
+              <div class="preview-grid">
+                <div class="preview-card"><span>Raw</span><strong id="previewRaw">—</strong></div>
+                <div class="preview-card"><span>Deadzoned</span><strong id="previewDeadzoned">—</strong></div>
+                <div class="preview-card"><span>Curved</span><strong id="previewCurved">—</strong></div>
+                <div class="preview-card"><span>Smoothed</span><strong id="previewSmoothed">—</strong></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card span-12">
           <div class="section-head">
             <div>
               <h2>Activity Log</h2>

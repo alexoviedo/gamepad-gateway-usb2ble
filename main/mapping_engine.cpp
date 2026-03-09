@@ -3,6 +3,11 @@
 #include <math.h>
 #include <string.h>
 
+#include <string>
+
+#include <cJSON.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include "esp_log.h"
 
 namespace mapping {
@@ -15,8 +20,10 @@ static constexpr ElementId kVirtualToeBrakeMax = 0xFFFF;
 
 static MappingProfile g_profile;
 static bool g_profile_dirty = true;
+static bool g_user_profile_active = false;
 static uint32_t g_devices_signature = 0;
 static bool g_profile_logged_for_sig = false;
+static SemaphoreHandle_t g_profile_mutex = nullptr;
 
 // EMA state (normalized) per output axis.
 static float g_axis_ema[(size_t)OutputAxis::COUNT];
@@ -34,18 +41,31 @@ void MappingProfile::clear() {
 }
 
 void mapping_engine_init() {
+  if (!g_profile_mutex) g_profile_mutex = xSemaphoreCreateMutex();
+  if (g_profile_mutex) xSemaphoreTake(g_profile_mutex, portMAX_DELAY);
   g_profile.clear();
   g_profile_dirty = true;
+  g_user_profile_active = false;
   g_devices_signature = 0;
   g_profile_logged_for_sig = false;
   memset(g_axis_ema, 0, sizeof(g_axis_ema));
   memset(g_axis_ema_valid, 0, sizeof(g_axis_ema_valid));
+  if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);
 }
 
 void mapping_engine_notify_devices_changed() {
-  g_profile_dirty = true;
+  if (g_profile_mutex) xSemaphoreTake(g_profile_mutex, portMAX_DELAY);
+  if (!g_user_profile_active) g_profile_dirty = true;
   g_profile_logged_for_sig = false;
   memset(g_axis_ema_valid, 0, sizeof(g_axis_ema_valid));
+  if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);
+}
+
+void mapping_engine_mark_profile_dirty() {
+  if (g_profile_mutex) xSemaphoreTake(g_profile_mutex, portMAX_DELAY);
+  g_profile_logged_for_sig = false;
+  memset(g_axis_ema_valid, 0, sizeof(g_axis_ema_valid));
+  if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);
 }
 
 static uint32_t hash_u32(uint32_t h, uint32_t v) {
@@ -67,7 +87,7 @@ static uint32_t compute_devices_signature(const HidDeviceContext *devices,
   return h;
 }
 
-static const char *axis_name(OutputAxis a) {
+const char *axis_name(OutputAxis a) {
   switch (a) {
     case OutputAxis::X: return "x";
     case OutputAxis::Y: return "y";
@@ -81,6 +101,18 @@ static const char *axis_name(OutputAxis a) {
     default: return "?";
   }
 }
+static bool output_axis_from_name(const char *name, OutputAxis *out) {
+  if (!name || !out) return false;
+  for (size_t i = 0; i < (size_t)OutputAxis::COUNT; i++) {
+    OutputAxis axis = (OutputAxis)i;
+    if (strcmp(name, axis_name(axis)) == 0) {
+      *out = axis;
+      return true;
+    }
+  }
+  return false;
+}
+
 
 static const HidDeviceContext *find_device_for_role(const HidDeviceContext *devices,
                                                     size_t num_devices,
@@ -174,9 +206,13 @@ static void set_axis_mapping(MappingProfile &p, OutputAxis axis, AxisSource src)
   m.source = src;
   // Defaults: preserve legacy behavior until UI/config exists.
   m.mod.invert = false;
-  m.mod.deadzone = 0.0f;
+  m.mod.deadzone_inner = 0.0f;
+  m.mod.outer_clamp = 0.0f;
   m.mod.smoothing_alpha = 0.0f;
-  m.mod.curve = 1.0f;
+  m.mod.bezier_p1x = 0.25f;
+  m.mod.bezier_p1y = 0.25f;
+  m.mod.bezier_p2x = 0.75f;
+  m.mod.bezier_p2y = 0.75f;
 }
 
 static void build_default_profile(const HidDeviceContext *devices, size_t num_devices,
@@ -319,14 +355,75 @@ static void build_default_profile(const HidDeviceContext *devices, size_t num_de
 }
 
 
-static float apply_deadzone(float v, float dz) {
-  if (dz <= 0.0f) return v;
+static float clamp01(float v) {
+  if (v < 0.0f) return 0.0f;
+  if (v > 1.0f) return 1.0f;
+  return v;
+}
+
+static float apply_deadzone_bipolar(float v, float inner, float outer) {
+  inner = clamp01(inner);
+  outer = clamp01(outer);
+  float limit = 1.0f - outer;
+  if (limit < 0.001f) limit = 0.001f;
+  if (inner >= limit) inner = limit - 0.001f;
+  if (inner < 0.0f) inner = 0.0f;
+
   float av = fabsf(v);
-  if (av < dz) return 0.0f;
-  float sign = (v < 0.0f) ? -1.0f : 1.0f;
-  float scaled = (av - dz) / (1.0f - dz);
+  if (av <= inner) return 0.0f;
+  if (av >= limit) return (v < 0.0f) ? -1.0f : 1.0f;
+
+  float scaled = (av - inner) / (limit - inner);
   if (scaled > 1.0f) scaled = 1.0f;
-  return sign * scaled;
+  return (v < 0.0f) ? -scaled : scaled;
+}
+
+static float apply_deadzone_unipolar(float v, float inner, float outer) {
+  inner = clamp01(inner);
+  outer = clamp01(outer);
+  float limit = 1.0f - outer;
+  if (limit < 0.001f) limit = 0.001f;
+  if (inner >= limit) inner = limit - 0.001f;
+  if (inner < 0.0f) inner = 0.0f;
+
+  v = clamp01(v);
+  if (v <= inner) return 0.0f;
+  if (v >= limit) return 1.0f;
+  return (v - inner) / (limit - inner);
+}
+
+static float cubic_bezier(float a, float b, float c, float d, float t) {
+  const float mt = 1.0f - t;
+  return mt * mt * mt * a + 3.0f * mt * mt * t * b + 3.0f * mt * t * t * c + t * t * t * d;
+}
+
+static float apply_bezier_curve01(float x, const AxisModifiers &mod) {
+  x = clamp01(x);
+  const float p1x = clamp01(mod.bezier_p1x);
+  const float p1y = clamp01(mod.bezier_p1y);
+  const float p2x = clamp01(mod.bezier_p2x);
+  const float p2y = clamp01(mod.bezier_p2y);
+
+  float lo = 0.0f;
+  float hi = 1.0f;
+  float t = x;
+  for (int i = 0; i < 18; i++) {
+    t = (lo + hi) * 0.5f;
+    const float bx = cubic_bezier(0.0f, p1x, p2x, 1.0f, t);
+    if (bx < x) lo = t;
+    else hi = t;
+  }
+  return clamp01(cubic_bezier(0.0f, p1y, p2y, 1.0f, t));
+}
+
+static float apply_curve_bipolar(float v, const AxisModifiers &mod) {
+  float sign = v < 0.0f ? -1.0f : 1.0f;
+  float y = apply_bezier_curve01(fabsf(v), mod);
+  return sign * y;
+}
+
+static float apply_curve_unipolar(float v, const AxisModifiers &mod) {
+  return apply_bezier_curve01(v, mod);
 }
 
 static float apply_smoothing(OutputAxis axis, float v, float alpha) {
@@ -402,10 +499,203 @@ static uint8_t read_hat_value(const HidDeviceContext &dev, ElementId element_id)
   return 0;
 }
 
-void mapping_engine_log_profile() {
-  if (g_profile_logged_for_sig) return;
+static cJSON *axis_mapping_to_json(const AxisMapping &m) {
+  cJSON *obj = cJSON_CreateObject();
+  cJSON_AddBoolToObject(obj, "configured", m.configured);
+  if (m.configured && m.source.is_valid()) {
+    cJSON_AddNumberToObject(obj, "device_id", (double)m.source.device_id);
+    cJSON_AddNumberToObject(obj, "element_id", (double)m.source.element_id);
+  }
+  cJSON_AddBoolToObject(obj, "invert", m.mod.invert);
 
-  ESP_LOGI(TAG, "Default mapping profile:");
+  cJSON *deadzone = cJSON_AddObjectToObject(obj, "deadzone");
+  cJSON_AddNumberToObject(deadzone, "inner", m.mod.deadzone_inner);
+  cJSON_AddNumberToObject(deadzone, "outer", m.mod.outer_clamp);
+
+  cJSON_AddNumberToObject(obj, "smoothing_alpha", m.mod.smoothing_alpha);
+
+  cJSON *curve = cJSON_AddObjectToObject(obj, "curve");
+  cJSON_AddStringToObject(curve, "type", "bezier");
+  cJSON *p1 = cJSON_AddObjectToObject(curve, "p1");
+  cJSON_AddNumberToObject(p1, "x", m.mod.bezier_p1x);
+  cJSON_AddNumberToObject(p1, "y", m.mod.bezier_p1y);
+  cJSON *p2 = cJSON_AddObjectToObject(curve, "p2");
+  cJSON_AddNumberToObject(p2, "x", m.mod.bezier_p2x);
+  cJSON_AddNumberToObject(p2, "y", m.mod.bezier_p2y);
+  return obj;
+}
+
+std::string mapping_engine_profile_to_json() {
+  if (g_profile_mutex) xSemaphoreTake(g_profile_mutex, portMAX_DELAY);
+
+  cJSON *root = cJSON_CreateObject();
+  cJSON_AddNumberToObject(root, "version", 2);
+  cJSON_AddBoolToObject(root, "buttons_or_combine", g_profile.buttons_or_combine);
+  cJSON *axes = cJSON_AddObjectToObject(root, "axes");
+  for (size_t i = 0; i < (size_t)OutputAxis::COUNT; i++) {
+    OutputAxis axis = (OutputAxis)i;
+    cJSON_AddItemToObject(axes, axis_name(axis), axis_mapping_to_json(g_profile.axes[i]));
+  }
+
+  char *printed = cJSON_PrintUnformatted(root);
+  std::string out = printed ? printed : "{}";
+  if (printed) cJSON_free(printed);
+  cJSON_Delete(root);
+
+  if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);
+  return out;
+}
+
+static bool parse_axis_mapping_patch(OutputAxis axis, const cJSON *node, AxisMapping *mapping,
+                                     std::string *error_out) {
+  if (!node || !mapping) return false;
+  if (cJSON_IsNull(node)) {
+    *mapping = AxisMapping{};
+    return true;
+  }
+  if (!cJSON_IsObject(node)) {
+    if (error_out) *error_out = std::string("axis '") + axis_name(axis) + "' must be an object";
+    return false;
+  }
+
+  AxisMapping next = *mapping;
+
+  cJSON *configured = cJSON_GetObjectItemCaseSensitive(node, "configured");
+  if (cJSON_IsBool(configured) && !cJSON_IsTrue(configured)) {
+    *mapping = AxisMapping{};
+    return true;
+  }
+
+  cJSON *device_id = cJSON_GetObjectItemCaseSensitive(node, "device_id");
+  if (cJSON_IsNumber(device_id)) next.source.device_id = (DeviceId)device_id->valuedouble;
+
+  cJSON *element_id = cJSON_GetObjectItemCaseSensitive(node, "element_id");
+  if (cJSON_IsNumber(element_id)) next.source.element_id = (ElementId)element_id->valuedouble;
+
+  cJSON *invert = cJSON_GetObjectItemCaseSensitive(node, "invert");
+  if (cJSON_IsBool(invert)) next.mod.invert = cJSON_IsTrue(invert);
+
+  cJSON *deadzone = cJSON_GetObjectItemCaseSensitive(node, "deadzone");
+  if (cJSON_IsNumber(deadzone)) {
+    next.mod.deadzone_inner = (float)deadzone->valuedouble; // legacy scalar support
+  } else if (cJSON_IsObject(deadzone)) {
+    cJSON *inner = cJSON_GetObjectItemCaseSensitive(deadzone, "inner");
+    if (cJSON_IsNumber(inner)) next.mod.deadzone_inner = (float)inner->valuedouble;
+    cJSON *outer = cJSON_GetObjectItemCaseSensitive(deadzone, "outer");
+    if (cJSON_IsNumber(outer)) next.mod.outer_clamp = (float)outer->valuedouble;
+  }
+
+  cJSON *outer_clamp = cJSON_GetObjectItemCaseSensitive(node, "outer_clamp");
+  if (cJSON_IsNumber(outer_clamp)) next.mod.outer_clamp = (float)outer_clamp->valuedouble;
+
+  cJSON *smoothing = cJSON_GetObjectItemCaseSensitive(node, "smoothing_alpha");
+  if (cJSON_IsNumber(smoothing)) next.mod.smoothing_alpha = (float)smoothing->valuedouble;
+
+  cJSON *curve = cJSON_GetObjectItemCaseSensitive(node, "curve");
+  if (cJSON_IsObject(curve)) {
+    cJSON *p1 = cJSON_GetObjectItemCaseSensitive(curve, "p1");
+    if (cJSON_IsObject(p1)) {
+      cJSON *x = cJSON_GetObjectItemCaseSensitive(p1, "x");
+      cJSON *y = cJSON_GetObjectItemCaseSensitive(p1, "y");
+      if (cJSON_IsNumber(x)) next.mod.bezier_p1x = (float)x->valuedouble;
+      if (cJSON_IsNumber(y)) next.mod.bezier_p1y = (float)y->valuedouble;
+    }
+    cJSON *p2 = cJSON_GetObjectItemCaseSensitive(curve, "p2");
+    if (cJSON_IsObject(p2)) {
+      cJSON *x = cJSON_GetObjectItemCaseSensitive(p2, "x");
+      cJSON *y = cJSON_GetObjectItemCaseSensitive(p2, "y");
+      if (cJSON_IsNumber(x)) next.mod.bezier_p2x = (float)x->valuedouble;
+      if (cJSON_IsNumber(y)) next.mod.bezier_p2y = (float)y->valuedouble;
+    }
+  }
+
+  if (!next.source.is_valid()) {
+    if (error_out) *error_out = std::string("axis '") + axis_name(axis) + "' is missing device_id/element_id";
+    return false;
+  }
+
+  next.mod.deadzone_inner = clamp01(next.mod.deadzone_inner);
+  if (next.mod.deadzone_inner > 0.99f) next.mod.deadzone_inner = 0.99f;
+  next.mod.outer_clamp = clamp01(next.mod.outer_clamp);
+  if (next.mod.outer_clamp > 0.99f) next.mod.outer_clamp = 0.99f;
+  if (next.mod.deadzone_inner + next.mod.outer_clamp > 0.98f) {
+    next.mod.outer_clamp = 0.98f - next.mod.deadzone_inner;
+    if (next.mod.outer_clamp < 0.0f) next.mod.outer_clamp = 0.0f;
+  }
+  if (next.mod.smoothing_alpha < 0.0f) next.mod.smoothing_alpha = 0.0f;
+  if (next.mod.smoothing_alpha > 1.0f) next.mod.smoothing_alpha = 1.0f;
+  next.mod.bezier_p1x = clamp01(next.mod.bezier_p1x);
+  next.mod.bezier_p1y = clamp01(next.mod.bezier_p1y);
+  next.mod.bezier_p2x = clamp01(next.mod.bezier_p2x);
+  next.mod.bezier_p2y = clamp01(next.mod.bezier_p2y);
+
+  next.configured = true;
+  *mapping = next;
+  return true;
+}
+
+bool mapping_engine_apply_profile_json(const char *json, size_t len, std::string *error_out) {
+  if (!json || len == 0) {
+    if (error_out) *error_out = "empty config";
+    return false;
+  }
+
+  cJSON *root = cJSON_ParseWithLength(json, len);
+  if (!root) {
+    if (error_out) *error_out = "invalid JSON";
+    return false;
+  }
+  if (!cJSON_IsObject(root)) {
+    cJSON_Delete(root);
+    if (error_out) *error_out = "config root must be an object";
+    return false;
+  }
+
+  if (g_profile_mutex) xSemaphoreTake(g_profile_mutex, portMAX_DELAY);
+  MappingProfile next = g_profile;
+
+  cJSON *replace_all = cJSON_GetObjectItemCaseSensitive(root, "replace_all");
+  if (cJSON_IsBool(replace_all) && cJSON_IsTrue(replace_all)) {
+    next.clear();
+  }
+
+  cJSON *buttons_or = cJSON_GetObjectItemCaseSensitive(root, "buttons_or_combine");
+  if (cJSON_IsBool(buttons_or)) next.buttons_or_combine = cJSON_IsTrue(buttons_or);
+
+  cJSON *axes = cJSON_GetObjectItemCaseSensitive(root, "axes");
+  if (axes) {
+    if (!cJSON_IsObject(axes)) {
+      if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);
+      cJSON_Delete(root);
+      if (error_out) *error_out = "axes must be an object";
+      return false;
+    }
+
+    for (size_t i = 0; i < (size_t)OutputAxis::COUNT; i++) {
+      OutputAxis axis = (OutputAxis)i;
+      cJSON *node = cJSON_GetObjectItemCaseSensitive(axes, axis_name(axis));
+      if (!node) continue;
+      if (!parse_axis_mapping_patch(axis, node, &next.axes[i], error_out)) {
+        if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);
+        cJSON_Delete(root);
+        return false;
+      }
+    }
+  }
+
+  g_profile = next;
+  g_profile_dirty = false;
+  g_user_profile_active = true;
+  g_profile_logged_for_sig = false;
+  memset(g_axis_ema_valid, 0, sizeof(g_axis_ema_valid));
+  if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);
+
+  cJSON_Delete(root);
+  return true;
+}
+
+static void log_profile_unlocked() {
+  ESP_LOGI(TAG, "%s mapping profile:", g_user_profile_active ? "Active/custom" : "Default");
   for (size_t i = 0; i < (size_t)OutputAxis::COUNT; i++) {
     OutputAxis a = (OutputAxis)i;
     const auto &m = g_profile.axes[i];
@@ -418,21 +708,31 @@ void mapping_engine_log_profile() {
                (unsigned long)m.source.device_id);
       continue;
     }
-    ESP_LOGI(TAG, "  %-7s -> dev=0x%08lx elem=%u inv=%d dz=%.3f ema=%.3f", axis_name(a),
+    ESP_LOGI(TAG, "  %-7s -> dev=0x%08lx elem=%u inv=%d dz_in=%.3f dz_out=%.3f ema=%.3f bz=(%.2f,%.2f)-(%.2f,%.2f)", axis_name(a),
              (unsigned long)m.source.device_id, (unsigned)m.source.element_id,
-             (int)m.mod.invert, (double)m.mod.deadzone, (double)m.mod.smoothing_alpha);
+             (int)m.mod.invert, (double)m.mod.deadzone_inner, (double)m.mod.outer_clamp,
+             (double)m.mod.smoothing_alpha, (double)m.mod.bezier_p1x, (double)m.mod.bezier_p1y,
+             (double)m.mod.bezier_p2x, (double)m.mod.bezier_p2y);
   }
   g_profile_logged_for_sig = true;
+}
+
+void mapping_engine_log_profile() {
+  if (g_profile_mutex) xSemaphoreTake(g_profile_mutex, portMAX_DELAY);
+  if (!g_profile_logged_for_sig) log_profile_unlocked();
+  if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);
 }
 
 void mapping_engine_compute(const HidDeviceContext *devices, size_t num_devices, GamepadState *out) {
   if (!out) return;
   memset(out, 0, sizeof(*out));
 
+  if (g_profile_mutex) xSemaphoreTake(g_profile_mutex, portMAX_DELAY);
+
   uint32_t sig = compute_devices_signature(devices, num_devices);
   if (sig != g_devices_signature) {
     g_devices_signature = sig;
-    g_profile_dirty = true;
+    if (!g_user_profile_active) g_profile_dirty = true;
     g_profile_logged_for_sig = false;
     memset(g_axis_ema_valid, 0, sizeof(g_axis_ema_valid));
   }
@@ -440,6 +740,7 @@ void mapping_engine_compute(const HidDeviceContext *devices, size_t num_devices,
   if (g_profile_dirty) {
     build_default_profile(devices, num_devices, g_profile);
     g_profile_dirty = false;
+    g_user_profile_active = false;
   }
 
   // Buttons OR-combine (default behavior)
@@ -464,13 +765,14 @@ void mapping_engine_compute(const HidDeviceContext *devices, size_t num_devices,
     float v = read_mapped_norm(*dev, axis, m.source.element_id);
     if (axis != OutputAxis::SLIDER1 && axis != OutputAxis::SLIDER2) {
       if (m.mod.invert) v = -v;
-      v = apply_deadzone(v, m.mod.deadzone);
+      v = apply_deadzone_bipolar(v, m.mod.deadzone_inner, m.mod.outer_clamp);
+      v = apply_curve_bipolar(v, m.mod);
       v = apply_smoothing(axis, v, m.mod.smoothing_alpha);
       *dst = norm_to_i16_bipolar(v);
     } else {
-      // sliders: 0..1
       if (m.mod.invert) v = 1.0f - v;
-      // No symmetric deadzone for sliders yet.
+      v = apply_deadzone_unipolar(v, m.mod.deadzone_inner, m.mod.outer_clamp);
+      v = apply_curve_unipolar(v, m.mod);
       v = apply_smoothing(axis, v, m.mod.smoothing_alpha);
       *dst = norm01_to_i16(v);
     }
@@ -485,7 +787,6 @@ void mapping_engine_compute(const HidDeviceContext *devices, size_t num_devices,
   compute_axis(OutputAxis::SLIDER1, &out->slider1);
   compute_axis(OutputAxis::SLIDER2, &out->slider2);
 
-  // Hat
   {
     const auto &m = g_profile.axes[(size_t)OutputAxis::HAT];
     if (m.configured && m.source.is_valid()) {
@@ -494,7 +795,8 @@ void mapping_engine_compute(const HidDeviceContext *devices, size_t num_devices,
     }
   }
 
-  mapping_engine_log_profile();
+  if (!g_profile_logged_for_sig) log_profile_unlocked();
+  if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);
 }
 
 }  // namespace mapping

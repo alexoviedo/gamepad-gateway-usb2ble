@@ -4,6 +4,9 @@
 #include "app_mode.h"
 #include "hid_device_manager.h"
 #include "input_decoder.h"
+#include "input_elements.h"
+#include "mapping_engine.h"
+#include "nvs_profile_store.h"
 
 #include <esp_log.h>
 #include <esp_system.h>
@@ -155,6 +158,26 @@ static const char *role_to_str(uint8_t role) {
   }
 }
 
+static void append_element_metadata(cJSON *arr, const InputElement &e) {
+  cJSON *obj = cJSON_CreateObject();
+  cJSON_AddNumberToObject(obj, "element_id", (double)e.element_id);
+  cJSON_AddStringToObject(obj, "kind", ie_kind_str(e.kind));
+  cJSON_AddNumberToObject(obj, "usage_page", (double)e.usage_page);
+  cJSON_AddNumberToObject(obj, "usage", (double)e.usage);
+  const char *friendly = ie_friendly_usage(e.usage_page, e.usage);
+  cJSON_AddStringToObject(obj, "usage_name", friendly ? friendly : "unknown");
+  cJSON_AddNumberToObject(obj, "report_id", (double)e.report_id);
+  cJSON_AddNumberToObject(obj, "bit_offset", (double)e.bit_offset);
+  cJSON_AddNumberToObject(obj, "bit_size", (double)e.bit_size);
+  cJSON_AddNumberToObject(obj, "logical_min", (double)e.logical_min);
+  cJSON_AddNumberToObject(obj, "logical_max", (double)e.logical_max);
+  cJSON_AddBoolToObject(obj, "is_signed", e.is_signed != 0);
+  cJSON_AddBoolToObject(obj, "is_relative", e.is_relative != 0);
+  cJSON_AddBoolToObject(obj, "is_absolute", e.is_absolute != 0);
+  cJSON_AddBoolToObject(obj, "is_variable", e.is_variable != 0);
+  cJSON_AddItemToArray(arr, obj);
+}
+
 static void cmd_get_devices(cJSON *resp) {
   HidDeviceInfo infos[8];
   const size_t n = hid_device_manager_list_devices(infos, 8);
@@ -185,6 +208,13 @@ static void cmd_get_descriptor(cJSON *req, cJSON *resp) {
   cJSON_AddNumberToObject(resp, "device_id", (double)device_id);
   cJSON_AddNumberToObject(resp, "descriptor_len", (double)got);
 
+  InputElement elems[MAX_INPUT_ELEMENTS];
+  const size_t elem_count = hid_device_manager_get_elements(device_id, elems, MAX_INPUT_ELEMENTS);
+  cJSON *arr = cJSON_AddArrayToObject(resp, "elements");
+  for (size_t i = 0; i < elem_count; i++) {
+    append_element_metadata(arr, elems[i]);
+  }
+
   if (got > 0 && got <= 0xFFFF) {
     notify_evt_chunked(2, tmp, (uint16_t)got);
   }
@@ -201,7 +231,13 @@ static void cmd_stop_stream(cJSON *resp) {
 }
 
 static void cmd_get_config(cJSON *resp) {
-  cJSON_AddStringToObject(resp, "config_json", g_config_json.c_str());
+  g_config_json = mapping::mapping_engine_profile_to_json();
+  cJSON *cfg = cJSON_Parse(g_config_json.c_str());
+  if (cfg) {
+    cJSON_AddItemToObject(resp, "config", cfg);
+  } else {
+    cJSON_AddStringToObject(resp, "config_json", g_config_json.c_str());
+  }
 }
 
 static void cmd_set_config(cJSON *req, cJSON *resp) {
@@ -224,15 +260,36 @@ static void cmd_set_config(cJSON *req, cJSON *resp) {
     return;
   }
 
-  g_config_json.assign(printed, len);
+  std::string error;
+  if (!mapping::mapping_engine_apply_profile_json(printed, len, &error)) {
+    cJSON_free(printed);
+    cJSON_AddStringToObject(resp, "error", error.empty() ? "invalid config" : error.c_str());
+    return;
+  }
   cJSON_free(printed);
 
+  hid_device_manager_recompute_mapping();
+  g_config_json = mapping::mapping_engine_profile_to_json();
+
   cJSON_AddBoolToObject(resp, "ok", true);
+  cJSON *normalized = cJSON_Parse(g_config_json.c_str());
+  if (normalized) cJSON_AddItemToObject(resp, "config", normalized);
 }
 
-static void cmd_save_profile_stub(cJSON *resp) {
-  cJSON_AddStringToObject(resp, "note", "save_profile is a stub (persistence not implemented yet)");
+static void cmd_save_profile(cJSON *resp) {
+  g_config_json = mapping::mapping_engine_profile_to_json();
+  std::string error;
+  if (!nvs_profile_store::save_json(g_config_json.c_str(), g_config_json.size(), &error)) {
+    cJSON_AddBoolToObject(resp, "ok", false);
+    cJSON_AddStringToObject(resp, "error", error.empty() ? "failed to save profile" : error.c_str());
+    return;
+  }
+
   cJSON_AddBoolToObject(resp, "ok", true);
+  cJSON_AddStringToObject(resp, "note", "profile saved to NVS");
+  cJSON_AddNumberToObject(resp, "bytes", (double)g_config_json.size());
+  cJSON *cfg = cJSON_Parse(g_config_json.c_str());
+  if (cfg) cJSON_AddItemToObject(resp, "config", cfg);
 }
 
 static void schedule_reboot(app_mode_t mode) {
@@ -285,7 +342,7 @@ static void handle_cmd_json(const char *json, size_t len) {
       } else if (strcmp(c, "set_config") == 0) {
         cmd_set_config(req, resp);
       } else if (strcmp(c, "save_profile") == 0) {
-        cmd_save_profile_stub(resp);
+        cmd_save_profile(resp);
       } else if (strcmp(c, "reboot_to_run") == 0) {
         cmd_reboot_to(APP_MODE_RUN, resp);
       } else if (strcmp(c, "reboot_to_config") == 0) {
@@ -338,6 +395,7 @@ static int gatt_access_cfg(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt
   // CFG (read/write)
   if (ble_uuid_cmp(ctxt->chr->uuid, (const ble_uuid_t *)&UUID_CHR_CFG) == 0) {
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+      g_config_json = mapping::mapping_engine_profile_to_json();
       const uint16_t off = ctxt->offset;
       if (off > g_config_json.size()) return BLE_ATT_ERR_INVALID_OFFSET;
 
@@ -366,6 +424,12 @@ static int gatt_access_cfg(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt
       if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
 
       g_config_json.append(tmp);
+
+      std::string error;
+      if (mapping::mapping_engine_apply_profile_json(g_config_json.c_str(), g_config_json.size(), &error)) {
+        hid_device_manager_recompute_mapping();
+        g_config_json = mapping::mapping_engine_profile_to_json();
+      }
       return 0;
     }
 
@@ -557,14 +621,27 @@ void ble_config_service_stream_tick(void) {
   const size_t m = hid_device_manager_get_elements(device_id, elems, MAX_INPUT_ELEMENTS);
   if (m == 0) return;
 
-  // Pick next axis/hat element.
+  // Prefer recently-updated controls so the web detector can identify the moving element.
   size_t picked = SIZE_MAX;
-  for (size_t tries = 0; tries < m; tries++) {
-    const size_t idx = (size_t)(g_stream_elem_cursor++ % (uint16_t)m);
-    const auto k = elems[idx].kind;
-    if (k == IE_KIND_AXIS || k == IE_KIND_HAT) {
-      picked = idx;
-      break;
+  uint32_t best_update = 0;
+  for (size_t i = 0; i < m; i++) {
+    const auto k = elems[i].kind;
+    if (k != IE_KIND_AXIS && k != IE_KIND_HAT && k != IE_KIND_BUTTON) continue;
+    if (elems[i].last_update_ms >= best_update) {
+      best_update = elems[i].last_update_ms;
+      picked = i;
+    }
+  }
+
+  // Fall back to round-robin over interesting controls if nothing changed recently.
+  if (picked == SIZE_MAX || best_update == 0) {
+    for (size_t tries = 0; tries < m; tries++) {
+      const size_t idx = (size_t)(g_stream_elem_cursor++ % (uint16_t)m);
+      const auto k = elems[idx].kind;
+      if (k == IE_KIND_AXIS || k == IE_KIND_HAT || k == IE_KIND_BUTTON) {
+        picked = idx;
+        break;
+      }
     }
   }
   if (picked == SIZE_MAX) picked = 0;

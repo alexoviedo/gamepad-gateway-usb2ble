@@ -42,6 +42,9 @@ void hid_device_manager_init(void);
 // Get the latest merged state (thread-safe, lock-free or protected)
 void hid_device_manager_get_merged_state(struct GamepadState *out_state);
 
+// Recompute the merged state immediately using the current active MappingProfile.
+void hid_device_manager_recompute_mapping(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -9,6 +9,7 @@ idf_component_register(
          "ble_gamepad.cpp"
          "ble_config_service.cpp"
          "app_mode.cpp"
+         "nvs_profile_store.cpp"
     INCLUDE_DIRS "."
 
     # Public deps (headers our public includes may expose)

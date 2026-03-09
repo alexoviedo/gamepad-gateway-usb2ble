@@ -3,6 +3,7 @@
 #include "app_mode.h"
 #include "hid_device_manager.h"
 #include "usb_host_manager.h"
+#include "mapping_engine.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -82,6 +83,12 @@ extern "C" void app_main() {
 
   // 3) Init HID Host Class Driver (creates its own background task)
   hid_device_manager_init();
+
+  if (app_mode_current() == APP_MODE_RUN) {
+    printf("RUN mode active mapping debug:
+");
+    mapping::mapping_engine_log_profile();
+  }
 
   // 4) Main loop: translate + notify BLE at a fixed cadence.
   //    All heavy lifting is done in the background tasks.
