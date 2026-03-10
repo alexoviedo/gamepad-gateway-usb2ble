@@ -395,6 +395,8 @@ class HotasConfigClient {
     this.latestSample = null;
     this.latestSampleByKey = new Map();
     this.streamActive = false;
+    this.streamSubscribed = false;
+    this.evtSubscribed = false;
     this.reconnectWanted = false;
     this.reconnectInFlight = false;
     this.reconnectAttempts = 0;
@@ -403,6 +405,35 @@ class HotasConfigClient {
     this.savedConfigString = '';
     this.pendingChanges = false;
     this.onDisconnectedBound = this.onDisconnected.bind(this);
+
+    this.handleEvtBound = (event) => {
+      const value = event.target.value;
+      const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      this.handleEvtNotification(bytes);
+    };
+
+    this.handleStreamBound = (event) => {
+      const value = event.target.value;
+      const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      this.handleStreamNotification(bytes);
+    };
+  }
+
+  delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  resetTransientState() {
+    for (const [, pending] of this.pendingJson.entries()) {
+      pending.reject(new Error('Request cancelled due to reconnect/disconnect.'));
+    }
+    this.pendingJson.clear();
+
+    this.chunkAssembler = new ChunkAssembler();
+    this.pendingDescriptorBinary = null;
+    this.streamActive = false;
+    this.streamSubscribed = false;
+    this.evtSubscribed = false;
   }
 
   async requestDevice() {
@@ -426,6 +457,32 @@ class HotasConfigClient {
     return this.device;
   }
 
+  async ensureEvtSubscription() {
+    if (!this.characteristics.evt) {
+      throw new Error('EVT characteristic is unavailable.');
+    }
+    if (this.evtSubscribed) return;
+
+    this.characteristics.evt.removeEventListener('characteristicvaluechanged', this.handleEvtBound);
+    this.characteristics.evt.addEventListener('characteristicvaluechanged', this.handleEvtBound);
+    await this.characteristics.evt.startNotifications();
+    this.evtSubscribed = true;
+    log('EVT notifications subscribed');
+  }
+
+  async ensureStreamSubscription() {
+    if (!this.characteristics.stream) {
+      throw new Error('STREAM characteristic is unavailable.');
+    }
+    if (this.streamSubscribed) return;
+
+    this.characteristics.stream.removeEventListener('characteristicvaluechanged', this.handleStreamBound);
+    this.characteristics.stream.addEventListener('characteristicvaluechanged', this.handleStreamBound);
+    await this.characteristics.stream.startNotifications();
+    this.streamSubscribed = true;
+    log('STREAM notifications subscribed');
+  }
+
   async connect({ reuseDevice = false } = {}) {
     clearError();
 
@@ -433,6 +490,8 @@ class HotasConfigClient {
       await this.requestDevice();
     }
     if (!this.device) throw new Error('No Bluetooth device selected.');
+
+    this.resetTransientState();
 
     log('Connecting to GATT server', this.device.name || this.device.id);
     this.server = await this.device.gatt.connect();
@@ -443,21 +502,15 @@ class HotasConfigClient {
     this.characteristics.stream = await this.service.getCharacteristic(UUIDS.stream);
     this.characteristics.cfg = await this.service.getCharacteristic(UUIDS.cfg);
 
-    await this.characteristics.evt.startNotifications();
-    this.characteristics.evt.addEventListener('characteristicvaluechanged', this.handleEvtBound ??= (event) => {
-      const value = event.target.value;
-      const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-      this.handleEvtNotification(bytes);
-    });
+    await this.ensureEvtSubscription();
 
-    await this.characteristics.stream.startNotifications();
-    this.characteristics.stream.addEventListener('characteristicvaluechanged', this.handleStreamBound ??= (event) => {
-      const value = event.target.value;
-      const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-      this.handleStreamNotification(bytes);
-    });
+    // Subscribe to stream only when stream is explicitly started.
+    this.streamSubscribed = false;
+    this.streamActive = false;
 
-    log('Connected and notifications enabled');
+    await this.delay(350);
+
+    log('Connected and EVT notifications enabled');
     return true;
   }
 
@@ -465,8 +518,18 @@ class HotasConfigClient {
     this.streamActive = false;
     if (intentional) this.reconnectWanted = false;
 
+    this.resetTransientState();
+
     try {
-      if (this.device?.gatt?.connected) this.device.gatt.disconnect();
+      if (this.characteristics.evt) {
+        this.characteristics.evt.removeEventListener('characteristicvaluechanged', this.handleEvtBound);
+      }
+      if (this.characteristics.stream) {
+        this.characteristics.stream.removeEventListener('characteristicvaluechanged', this.handleStreamBound);
+      }
+      if (this.device?.gatt?.connected) {
+        this.device.gatt.disconnect();
+      }
     } catch (error) {
       log('Disconnect warning', error.message || String(error));
     }
@@ -486,7 +549,7 @@ class HotasConfigClient {
     this.server = null;
     this.service = null;
     this.characteristics = {};
-    this.streamActive = false;
+    this.resetTransientState();
     render();
 
     if (!this.reconnectWanted || this.reconnectInFlight) return;
@@ -496,7 +559,7 @@ class HotasConfigClient {
       this.reconnectAttempts += 1;
       const delayMs = this.reconnectAttempts * 1000;
       log(`Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} scheduled`, `${delayMs}ms`);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await this.delay(delayMs);
       try {
         await this.reconnect();
         await this.getDevices();
@@ -516,31 +579,71 @@ class HotasConfigClient {
     showError('Connection dropped and automatic reconnect did not succeed. Press Reconnect to try again.');
   }
 
+  async writeCommandText(json) {
+    const cmd = this.characteristics.cmd;
+    if (!cmd) throw new Error('CMD characteristic is unavailable.');
+
+    const data = encodeUtf8(json);
+    const props = cmd.properties || {};
+
+    if (props.writeWithoutResponse && typeof cmd.writeValueWithoutResponse === 'function') {
+      await cmd.writeValueWithoutResponse(data);
+      return 'without-response';
+    }
+
+    if (props.write && typeof cmd.writeValue === 'function') {
+      await cmd.writeValue(data);
+      return 'with-response';
+    }
+
+    if (typeof cmd.writeValue === 'function') {
+      await cmd.writeValue(data);
+      return 'legacy-write';
+    }
+
+    throw new Error('CMD characteristic is not writable.');
+  }
+
   async sendCommand(command) {
     if (!this.characteristics.cmd) throw new Error('Not connected to the Config Service.');
+    await this.ensureEvtSubscription();
+
     const rid = ++this.requestId;
     const payload = { rid, ...command };
     const json = JSON.stringify(payload);
 
     const responsePromise = new Promise((resolve, reject) => {
-      this.pendingJson.set(rid, { resolve, reject, payload });
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         if (this.pendingJson.has(rid)) {
           this.pendingJson.delete(rid);
           reject(new Error(`Timed out waiting for response to ${payload.cmd}`));
         }
       }, 8000);
+
+      this.pendingJson.set(rid, {
+        resolve: (value) => {
+          clearTimeout(timeoutId);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        },
+        payload,
+      });
     });
 
-    await this.characteristics.cmd.writeValue(encodeUtf8(json));
-    log('CMD →', json);
+    const writeMode = await this.writeCommandText(json);
+    log('CMD →', `${json} [${writeMode}]`);
     return responsePromise;
   }
 
   async getDevices() {
     const response = await this.sendCommand({ cmd: 'get_devices' });
     this.devices = Array.isArray(response.devices) ? response.devices : [];
-    if (this.selectedDeviceId == null && this.devices.length) this.selectedDeviceId = this.devices[0].device_id;
+    if (this.selectedDeviceId == null && this.devices.length) {
+      this.selectedDeviceId = this.devices[0].device_id;
+    }
     return this.devices;
   }
 
@@ -557,6 +660,8 @@ class HotasConfigClient {
   }
 
   async startStream() {
+    await this.ensureEvtSubscription();
+    await this.ensureStreamSubscription();
     const response = await this.sendCommand({ cmd: 'start_stream' });
     this.streamActive = true;
     return response;
@@ -629,6 +734,8 @@ class HotasConfigClient {
   }
 
   handleEvtNotification(bytes) {
+    log('EVT frame', `${bytes.byteLength} bytes`);
+
     const complete = this.chunkAssembler.push(bytes);
     if (!complete) return;
 
@@ -651,6 +758,7 @@ class HotasConfigClient {
       }
 
       if (Array.isArray(payload?.devices)) this.devices = payload.devices;
+
       if (typeof payload?.device_id === 'number' && Array.isArray(payload?.elements)) {
         const byId = new Map();
         for (const element of payload.elements) {
@@ -658,6 +766,7 @@ class HotasConfigClient {
         }
         this.elementMetaByDevice.set(payload.device_id, byId);
       }
+
       if (payload?.config && typeof payload.config === 'object') {
         this.currentConfig = ensureConfigShape(payload.config);
       }
@@ -874,7 +983,9 @@ function refreshPreviewForSelectedAxis() {
   }
   const metaKey = `${sample.deviceId}:${sample.elementId}:${sample.receivedAt?.getTime?.() || 0}`;
   if (metaKey === tuningState.previewMetaKey && tuningState.preview) return;
-  const prev = tuningState.previewMetaKey.startsWith(`${sample.deviceId}:${sample.elementId}:`) ? tuningState.preview?.smoothed : null;
+  const prev = tuningState.previewMetaKey.startsWith(`${sample.deviceId}:${sample.elementId}:`)
+    ? tuningState.preview?.smoothed
+    : null;
   tuningState.preview = computePreviewFromSample(sample, axisKey, mapping, prev);
   tuningState.previewMetaKey = metaKey;
 }
@@ -917,13 +1028,6 @@ function drawCurveEditor(axisKey, mapping) {
   const toY = (n) => height - pad - n * plotH;
   const p1 = mapping.curve.p1;
   const p2 = mapping.curve.p2;
-
-  const curvePoints = [];
-  for (let i = 0; i <= 40; i += 1) {
-    const x = i / 40;
-    const y = applyBezier01(x, mapping.curve);
-    curvePoints.push(`${toX(x).toFixed(2)},${toY(y).toFixed(2)}`);
-  }
 
   const markerInput = tuningState.preview ? clamp(tuningState.preview.markerInput, 0, 1) : null;
   const markerOutput = tuningState.preview ? clamp(tuningState.preview.markerOutput, 0, 1) : null;
@@ -991,6 +1095,7 @@ function bindModifierControls() {
     [elements.outerClampRange, elements.outerClampInput, 'outerClamp'],
     [elements.smoothingRange, elements.smoothingInput, 'smoothing'],
   ];
+
   for (const [rangeEl, inputEl, kind] of pairs) {
     const handler = (value) => {
       const numeric = Number(value);
@@ -1003,10 +1108,12 @@ function bindModifierControls() {
         updateSelectedAxisConfig((next) => { next.smoothing_alpha = numeric; });
       }
     };
+
     rangeEl.addEventListener('input', (event) => {
       inputEl.value = event.target.value;
       handler(event.target.value);
     });
+
     inputEl.addEventListener('input', (event) => {
       rangeEl.value = event.target.value;
       handler(event.target.value);
@@ -1019,8 +1126,11 @@ function bindModifierControls() {
     tuningState.curveDragPoint = point;
     handleCurvePointer(event);
   });
+
   window.addEventListener('pointermove', handleCurvePointer);
-  window.addEventListener('pointerup', () => { tuningState.curveDragPoint = null; });
+  window.addEventListener('pointerup', () => {
+    tuningState.curveDragPoint = null;
+  });
 }
 
 const client = new HotasConfigClient();
@@ -1044,8 +1154,8 @@ function renderConnectionState() {
   elements.configBadge.className = `pill ${client.pendingChanges ? 'warn' : 'success'}`;
   elements.deviceName.textContent = client.device?.name || client.device?.id || '—';
   elements.gattState.textContent = connected ? 'Connected' : 'Not connected';
-  elements.evtState.textContent = connected ? 'Subscribed' : 'Off';
-  elements.streamState.textContent = connected ? 'Subscribed' : 'Off';
+  elements.evtState.textContent = connected && client.evtSubscribed ? 'Subscribed' : 'Off';
+  elements.streamState.textContent = connected && client.streamSubscribed ? 'Subscribed' : 'Off';
 
   elements.connectBtn.disabled = connected;
   elements.reconnectBtn.disabled = !client.device || connected;
@@ -1062,6 +1172,7 @@ function renderConnectionState() {
 
 function renderDevices() {
   elements.deviceCount.textContent = `${client.devices.length} device${client.devices.length === 1 ? '' : 's'}`;
+
   if (!client.devices.length) {
     elements.deviceList.className = 'device-list empty-state';
     elements.deviceList.textContent = 'Connect and request devices to populate this list.';
@@ -1070,6 +1181,7 @@ function renderDevices() {
 
   elements.deviceList.className = 'device-list';
   elements.deviceList.innerHTML = '';
+
   for (const device of client.devices) {
     const card = document.createElement('article');
     card.className = `device-card${device.device_id === client.selectedDeviceId ? ' active' : ''}`;
@@ -1131,9 +1243,13 @@ function renderTelemetry() {
 
   const latestFields = elements.latestSample.querySelectorAll('.latest-row span:last-child');
   if (!latest) {
-    ['—', '—', '—', '—'].forEach((value, index) => { latestFields[index].textContent = value; });
+    ['—', '—', '—', '—'].forEach((value, index) => {
+      latestFields[index].textContent = value;
+    });
   } else {
-    latestFields[0].textContent = latest.meta ? describeElement(latest.meta) : `device ${latest.deviceId} · element ${latest.elementId}`;
+    latestFields[0].textContent = latest.meta
+      ? describeElement(latest.meta)
+      : `device ${latest.deviceId} · element ${latest.elementId}`;
     latestFields[1].textContent = String(latest.raw);
     latestFields[2].textContent = `${latest.normQ15} (${formatQ15(latest.normQ15)})`;
     latestFields[3].textContent = latest.receivedAt.toLocaleTimeString();
@@ -1141,12 +1257,15 @@ function renderTelemetry() {
 
   if (!history.length) {
     elements.telemetryList.className = 'telemetry-list empty-state';
-    elements.telemetryList.textContent = client.streamActive ? 'Waiting for stream samples…' : 'Start stream to see live samples.';
+    elements.telemetryList.textContent = client.streamActive
+      ? 'Waiting for stream samples…'
+      : 'Start stream to see live samples.';
     return;
   }
 
   elements.telemetryList.className = 'telemetry-list';
   elements.telemetryList.innerHTML = '';
+
   for (const sample of history.slice(0, 24)) {
     const row = document.createElement('div');
     row.className = 'telemetry-row';
@@ -1232,6 +1351,7 @@ function renderMappings() {
       </div>
       <div class="mapping-value">${value}</div>
     `;
+
     row.addEventListener('click', () => {
       tuningState.selectedAxisKey = target.key;
       elements.tuneAxisSelect.value = target.key;
@@ -1240,6 +1360,7 @@ function renderMappings() {
       refreshPreviewForSelectedAxis();
       render();
     });
+
     elements.mappingList.appendChild(row);
   }
 }
@@ -1253,6 +1374,7 @@ function renderTuningPanel() {
 
   elements.tuneAxisSelect.value = axisKey;
   elements.resetModifiersBtn.disabled = disabled;
+
   for (const el of [
     elements.deadzoneInnerRange,
     elements.deadzoneInnerInput,
@@ -1282,6 +1404,7 @@ function renderTuningPanel() {
     elements.curveStatus.textContent = `${targetByKey(axisKey).label} · map a source first`;
     return;
   }
+
   if (isHat) {
     elements.previewRaw.textContent = 'POV';
     elements.previewDeadzoned.textContent = 'N/A';
@@ -1400,6 +1523,7 @@ elements.downloadDescriptorBtn.addEventListener('click', () => {
 });
 
 elements.targetSelect.addEventListener('change', () => render());
+
 elements.tuneAxisSelect.addEventListener('change', () => {
   tuningState.selectedAxisKey = elements.tuneAxisSelect.value;
   tuningState.preview = null;
@@ -1407,6 +1531,7 @@ elements.tuneAxisSelect.addEventListener('change', () => {
   refreshPreviewForSelectedAxis();
   render();
 });
+
 elements.resetModifiersBtn.addEventListener('click', () => {
   updateSelectedAxisConfig((next) => {
     next.deadzone = { inner: 0, outer: 0 };

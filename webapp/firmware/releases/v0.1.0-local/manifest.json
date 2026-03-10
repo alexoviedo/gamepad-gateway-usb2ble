@@ -1,0 +1,24 @@
+{
+  "name": "HOTAS Bridge",
+  "version": "v0.1.0-local",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "./bootloader.bin",
+          "offset": 0
+        },
+        {
+          "path": "./partition-table.bin",
+          "offset": 32768
+        },
+        {
+          "path": "./hotas-bridge.bin",
+          "offset": 65536
+        }
+      ]
+    }
+  ]
+}

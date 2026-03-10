@@ -26,11 +26,11 @@ function formatDate(value) {
   return date.toLocaleString();
 }
 
-function resolveUrl(base, maybeRelative) {
+function absoluteUrl(value, base = window.location.href) {
   try {
-    return new URL(maybeRelative, base).toString();
+    return new URL(value, base).toString();
   } catch {
-    return maybeRelative;
+    return value;
   }
 }
 
@@ -91,7 +91,7 @@ function setStatusPill(id, text, tone = 'muted') {
   el.className = `pill ${tone}`;
 }
 
-function buildDownloadsList(container, meta, metaUrl) {
+function buildDownloadsList(container, meta, assetBaseUrl) {
   if (!container) return;
   const artifacts = meta?.artifacts || {};
   const entries = Object.entries(artifacts);
@@ -114,7 +114,7 @@ function buildDownloadsList(container, meta, metaUrl) {
     link.className = 'btn';
     link.target = '_blank';
     link.rel = 'noreferrer';
-    link.href = resolveUrl(metaUrl, artifact.path);
+    link.href = absoluteUrl(artifact.path, assetBaseUrl || window.location.href);
     link.textContent = 'Download';
     row.append(left, link);
     container.appendChild(row);
@@ -144,13 +144,15 @@ function normalizeManifestMeta(meta, metaUrl) {
   if (!meta || typeof meta !== 'object') return null;
   return {
     ...meta,
-    manifestUrl: meta.manifestUrl ? resolveUrl(metaUrl, meta.manifestUrl) : meta.manifestPath ? resolveUrl(metaUrl, meta.manifestPath) : null,
+    feedUrl: metaUrl,
+    manifestUrl: meta.manifestUrl ? absoluteUrl(meta.manifestUrl, metaUrl) : meta.manifestPath ? absoluteUrl(meta.manifestPath, metaUrl) : null,
   };
 }
 
 async function loadFirmwareFeed(url) {
-  const raw = await fetchJson(url);
-  return normalizeManifestMeta(raw, url);
+  const feedUrl = absoluteUrl(url, window.location.href);
+  const raw = await fetchJson(feedUrl);
+  return normalizeManifestMeta(raw, feedUrl);
 }
 
 async function hydrateFirmwareUi(meta, sourceUrl) {
@@ -187,7 +189,7 @@ async function hydrateFirmwareUi(meta, sourceUrl) {
   }
 
   const downloads = document.getElementById('firmwareDownloads');
-  buildDownloadsList(downloads, meta, sourceUrl);
+  buildDownloadsList(downloads, meta, meta?.manifestUrl || sourceUrl);
 
   const installHost = document.getElementById('firmwareInstallHost');
   const manualManifestInput = document.getElementById('customManifestInput');

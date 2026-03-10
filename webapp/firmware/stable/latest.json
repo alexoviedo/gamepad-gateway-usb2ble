@@ -1,12 +1,35 @@
 {
   "channel": "stable",
-  "version": "unpublished",
-  "build": "",
+  "version": "v0.1.0-local",
+  "build": "b3a0d8b",
   "chipFamily": "ESP32-S3",
-  "publishedAt": "",
+  "publishedAt": "2026-03-10T01:55:47Z",
   "releaseUrl": "",
-  "releaseNotes": "No published stable firmware feed exists yet. Run the release workflow to stage binaries, manifests, and checksums.",
-  "manifestPath": "",
-  "artifacts": {},
-  "checksums": {}
+  "releaseNotes": "Local validation build",
+  "manifestPath": "../releases/v0.1.0-local/manifest.json",
+  "artifacts": {
+    "bootloader": {
+      "label": "Bootloader",
+      "path": "./bootloader.bin",
+      "offset": 0,
+      "sha256": "fa9640163d0c209d314ce1e95a4f8d8269dbfc9c0f9509646528104261d68bd5"
+    },
+    "partitionTable": {
+      "label": "Partition table",
+      "path": "./partition-table.bin",
+      "offset": 32768,
+      "sha256": "5295e8c42d6fb5f95e4e8a185932c6191d27cfc5078322475347e40e71af815a"
+    },
+    "app": {
+      "label": "Application",
+      "path": "./hotas-bridge.bin",
+      "offset": 65536,
+      "sha256": "3aafd9cbf13e808b955a3838544d466e6ccca98380192a320be46a09a4882b8d"
+    }
+  },
+  "checksums": {
+    "bootloader": "fa9640163d0c209d314ce1e95a4f8d8269dbfc9c0f9509646528104261d68bd5",
+    "partitionTable": "5295e8c42d6fb5f95e4e8a185932c6191d27cfc5078322475347e40e71af815a",
+    "app": "3aafd9cbf13e808b955a3838544d466e6ccca98380192a320be46a09a4882b8d"
+  }
 }
