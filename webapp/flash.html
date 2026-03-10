@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HOTAS Bridge Firmware Flasher</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./flash.css" />
+  </head>
+  <body>
+    <div id="flashPage" class="app-shell flash-shell">
+      <header class="hero flash-hero">
+        <div>
+          <p class="eyebrow">Firmware Delivery</p>
+          <h1>HOTAS Bridge Browser Flasher</h1>
+          <p class="hero-copy">
+            Flash published HOTAS Bridge firmware to an ESP32-S3 directly from the browser over USB.
+            No local ESP-IDF setup is required for normal desktop users. The page reads a published
+            firmware manifest, exposes checksums and downloads, and launches a guided browser flasher.
+          </p>
+          <div class="hero-links">
+            <a class="btn" href="./index.html">Open Config Console</a>
+            <a class="btn" href="./validation.html">Open Validation Scene</a>
+          </div>
+        </div>
+        <div class="hero-status card compact">
+          <div class="status-row">
+            <span class="label">Feed</span>
+            <span id="firmwareFeedPill" class="pill muted">Loading feed</span>
+          </div>
+          <div class="status-row">
+            <span class="label">Manifest</span>
+            <span id="firmwareManifestPill" class="pill muted">Awaiting manifest</span>
+          </div>
+          <div class="status-row">
+            <span class="label">Compatibility</span>
+            <span id="firmwareCompatPill" class="pill muted">Checking browser</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="grid">
+        <section class="card span-12 firmware-feed-card">
+          <div class="section-head">
+            <div>
+              <h2>Published firmware feed</h2>
+              <p>Choose a release channel, refresh the published feed, or paste a custom manifest URL for manual validation.</p>
+            </div>
+          </div>
+
+          <div class="toolbar firmware-feed-toolbar">
+            <select id="firmwareChannelSelect" class="select">
+              <option value="stable">Stable channel</option>
+              <option value="beta">Beta channel</option>
+            </select>
+            <button id="refreshFirmwareFeedBtn" class="btn btn-primary">Refresh feed</button>
+            <input
+              id="customManifestInput"
+              class="firmware-manifest-input"
+              type="url"
+              placeholder="Optional custom manifest URL for manual testing"
+            />
+            <button id="loadCustomManifestBtn" class="btn">Load custom manifest</button>
+          </div>
+
+          <div class="firmware-meta-grid">
+            <div class="meta-item"><span class="label">Version</span><span id="firmwareVersion">—</span></div>
+            <div class="meta-item"><span class="label">Channel</span><span id="firmwareChannel">—</span></div>
+            <div class="meta-item"><span class="label">Chip family</span><span id="firmwareChip">ESP32-S3</span></div>
+            <div class="meta-item"><span class="label">Published</span><span id="firmwarePublishedAt">—</span></div>
+            <div class="meta-item"><span class="label">Build</span><span id="firmwareBuild">—</span></div>
+            <div class="meta-item"><span class="label">Feed URL</span><span id="firmwareSourceUrl">—</span></div>
+          </div>
+        </section>
+
+        <section class="card span-7 firmware-install-card">
+          <div class="section-head">
+            <div>
+              <h2>Flash over USB</h2>
+              <p>Recommended workflow: desktop Chrome or Edge, direct USB cable, and no other serial monitor open.</p>
+            </div>
+          </div>
+          <div class="firmware-compat-banner">
+            <strong>Browser support</strong>
+            <p id="firmwareCompatText">Checking browser capabilities.</p>
+          </div>
+          <div id="firmwareInstallHost" class="firmware-install-host empty-state">
+            Loading firmware manifest.
+          </div>
+          <div class="firmware-callouts">
+            <div class="callout">
+              <strong>Board prep</strong>
+              <span>Connect the ESP32-S3 over a data-capable USB cable. Disconnect other serial tools before flashing.</span>
+            </div>
+            <div class="callout">
+              <strong>Mobile</strong>
+              <span>Phone and tablet support depends on browser USB/serial support and cable/adapter compatibility. Desktop remains the primary path.</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card span-5 firmware-details-card">
+          <div class="section-head">
+            <div>
+              <h2>Release details</h2>
+              <p>Checksums and release notes for the currently selected build.</p>
+            </div>
+            <a id="firmwareReleaseLink" class="btn hidden" target="_blank" rel="noreferrer">Open release notes</a>
+          </div>
+          <div class="firmware-sha-grid">
+            <div class="meta-item"><span class="label">Bootloader SHA</span><span id="firmwareBootSha">—</span></div>
+            <div class="meta-item"><span class="label">Partition SHA</span><span id="firmwarePartSha">—</span></div>
+            <div class="meta-item"><span class="label">App SHA</span><span id="firmwareAppSha">—</span></div>
+          </div>
+          <div class="firmware-notes">
+            <span class="label">Release notes</span>
+            <p id="firmwareReleaseNotes">Loading release notes.</p>
+          </div>
+        </section>
+
+        <section class="card span-12 firmware-downloads-card">
+          <div class="section-head">
+            <div>
+              <h2>Direct binary downloads</h2>
+              <p>Use these when you need the raw flash images for manual tooling or offline support.</p>
+            </div>
+          </div>
+          <div id="firmwareDownloads" class="firmware-downloads empty-state">Loading artifacts.</div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./firmware-installer.js"></script>
+  </body>
+</html>

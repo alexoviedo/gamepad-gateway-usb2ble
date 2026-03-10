@@ -1,0 +1,12 @@
+{
+  "channel": "beta",
+  "version": "unpublished",
+  "build": "",
+  "chipFamily": "ESP32-S3",
+  "publishedAt": "",
+  "releaseUrl": "",
+  "releaseNotes": "No published beta firmware feed exists yet. Run the release workflow to stage binaries, manifests, and checksums.",
+  "manifestPath": "",
+  "artifacts": {},
+  "checksums": {}
+}

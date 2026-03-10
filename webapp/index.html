@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HOTAS Bridge Config</title>
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./flash.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -19,6 +20,7 @@
           </p>
           <div class="hero-links">
             <a class="btn" href="./validation.html">Open Validation Scene</a>
+            <a class="btn" href="./flash.html">Open Firmware Flasher</a>
           </div>
         </div>
         <div class="hero-status card compact">
@@ -256,6 +258,36 @@
           </div>
         </section>
 
+
+        <section id="firmwareQuickCard" class="card span-12 firmware-card">
+          <div class="section-head">
+            <div>
+              <h2>Browser Firmware Flashing</h2>
+              <p>Ship firmware to end users without requiring a local ESP-IDF toolchain. Publish a release feed, then let users flash over USB from the browser.</p>
+            </div>
+            <a class="btn btn-primary" href="./flash.html">Open Full Firmware Flasher</a>
+          </div>
+
+          <div class="quick-firmware-grid">
+            <div class="quick-firmware-copy">
+              <div class="quick-firmware-meta">
+                <div class="meta-item"><span class="label">Latest stable</span><span id="firmwareQuickVersion">Unavailable</span></div>
+                <div class="meta-item"><span class="label">Status</span><span id="firmwareQuickStatus">Loading release feed</span></div>
+              </div>
+              <p id="firmwareQuickNotes">Publish a firmware manifest to enable one-click flashing directly from the config console.</p>
+            </div>
+            <div class="quick-firmware-actions">
+              <div class="quick-firmware-note">
+                <strong>Recommended for end users</strong>
+                <p>Desktop Chrome or Edge, direct USB cable, and the published stable release feed. Phone support depends on browser USB capabilities, so treat mobile flashing as optional.</p>
+              </div>
+              <div class="toolbar tight">
+                <a class="btn" href="./flash.html">Review release + checksums</a>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="card span-12">
           <div class="section-head">
             <div>
@@ -270,5 +302,6 @@
     </div>
 
     <script type="module" src="./app.js"></script>
+    <script type="module" src="./firmware-installer.js"></script>
   </body>
 </html>

@@ -18,9 +18,12 @@ A static, client-side Web Bluetooth console for the ESP32 **Config Service**.
 
 ## Files
 
-- `index.html` — app shell
-- `styles.css` — polished dark-mode UI
+- `index.html` — config console and quick-launch firmware section
+- `styles.css` — shared dark-mode UI
 - `app.js` — WebBLE logic, chunk reassembly, telemetry decoding, mapping wizard, and response tuning UI
+- `flash.html` — browser-based USB firmware flasher
+- `flash.css` — flasher-specific layout and card styles
+- `firmware-installer.js` — release feed loading, manifest handling, and browser flasher bootstrapping
 
 ## Requirements
 
@@ -95,3 +98,33 @@ Recommended flow:
 5. Move the real controls and confirm the virtual HOTAS/pedals react smoothly.
 6. Click **Save to Device** when satisfied.
 7. Click **Reboot to Run Mode** to return the bridge to HID gamepad mode.
+
+
+## Firmware flasher
+
+A dedicated browser-based firmware flashing page is now available at:
+
+```text
+http://localhost:8080/flash.html
+```
+
+What it includes:
+
+- stable / beta release feed selection
+- custom manifest URL loading for manual validation
+- one-click browser flashing for published firmware manifests
+- direct binary download links and checksum visibility
+- a quick-launch entry point from the main Config Console page
+
+Release feeds are generated into `webapp/firmware/` by:
+
+```bash
+python3 ../scripts/generate_firmware_manifest.py ...
+```
+
+For automated packaging and publish-ready artifacts, see:
+
+```text
+.github/workflows/release-firmware.yml
+docs/FIRMWARE_RELEASES.md
+```
