@@ -115,6 +115,7 @@ for (const target of OUTPUT_TARGETS) {
   option.value = target.key;
   option.textContent = target.label;
   elements.targetSelect.appendChild(option);
+
   const tuneOption = option.cloneNode(true);
   elements.tuneAxisSelect.appendChild(tuneOption);
 }
@@ -307,6 +308,7 @@ function computePreviewFromSample(sample, axisKey, mapping, previousSmoothed = n
   const smoothed = config.smoothing_alpha <= 0 || previousSmoothed == null
     ? curved
     : previousSmoothed * (1 - config.smoothing_alpha) + curved * config.smoothing_alpha;
+
   return {
     raw,
     deadzoned,
@@ -341,6 +343,7 @@ class ChunkAssembler {
 
   push(frameBytes) {
     if (frameBytes.byteLength < 8) return null;
+
     const view = new DataView(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength);
     const version = view.getUint8(0);
     const type = view.getUint8(1);
@@ -423,12 +426,20 @@ class HotasConfigClient {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  ensureDefaultConfig(markSaved = false) {
+    this.currentConfig = ensureConfigShape(this.currentConfig || { version: 2, axes: {} });
+    if (markSaved) {
+      this.savedConfigString = configToStableString(this.currentConfig);
+      this.pendingChanges = false;
+    }
+    return this.currentConfig;
+  }
+
   resetTransientState() {
     for (const [, pending] of this.pendingJson.entries()) {
       pending.reject(new Error('Request cancelled due to reconnect/disconnect.'));
     }
     this.pendingJson.clear();
-
     this.chunkAssembler = new ChunkAssembler();
     this.pendingDescriptorBinary = null;
     this.streamActive = false;
@@ -449,6 +460,7 @@ class HotasConfigClient {
       ],
       optionalServices: [UUIDS.service],
     });
+
     log('Device selected', `${this.device.name || '(unnamed)'} [${this.device.id}]`);
     this.device.removeEventListener('gattserverdisconnected', this.onDisconnectedBound);
     this.device.addEventListener('gattserverdisconnected', this.onDisconnectedBound);
@@ -489,7 +501,9 @@ class HotasConfigClient {
     if (!reuseDevice || !this.device) {
       await this.requestDevice();
     }
-    if (!this.device) throw new Error('No Bluetooth device selected.');
+    if (!this.device) {
+      throw new Error('No Bluetooth device selected.');
+    }
 
     this.resetTransientState();
 
@@ -504,7 +518,6 @@ class HotasConfigClient {
 
     await this.ensureEvtSubscription();
 
-    // Subscribe to stream only when stream is explicitly started.
     this.streamSubscribed = false;
     this.streamActive = false;
 
@@ -516,7 +529,9 @@ class HotasConfigClient {
 
   async disconnect({ intentional = true } = {}) {
     this.streamActive = false;
-    if (intentional) this.reconnectWanted = false;
+    if (intentional) {
+      this.reconnectWanted = false;
+    }
 
     this.resetTransientState();
 
@@ -540,7 +555,9 @@ class HotasConfigClient {
   }
 
   async reconnect() {
-    if (!this.device) throw new Error('No previously selected Bluetooth device to reconnect to.');
+    if (!this.device) {
+      throw new Error('No previously selected Bluetooth device to reconnect to.');
+    }
     return this.connect({ reuseDevice: true });
   }
 
@@ -560,11 +577,12 @@ class HotasConfigClient {
       const delayMs = this.reconnectAttempts * 1000;
       log(`Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} scheduled`, `${delayMs}ms`);
       await this.delay(delayMs);
+
       try {
         await this.reconnect();
         await this.getDevices();
         await this.loadAllDescriptors();
-        await this.getConfig({ markSaved: false });
+        await this.tryLoadConfigNonFatal({ markSaved: false });
         log('Reconnect successful');
         this.reconnectAttempts = 0;
         this.reconnectInFlight = false;
@@ -581,7 +599,9 @@ class HotasConfigClient {
 
   async writeCommandText(json) {
     const cmd = this.characteristics.cmd;
-    if (!cmd) throw new Error('CMD characteristic is unavailable.');
+    if (!cmd) {
+      throw new Error('CMD characteristic is unavailable.');
+    }
 
     const data = encodeUtf8(json);
     const props = cmd.properties || {};
@@ -605,7 +625,10 @@ class HotasConfigClient {
   }
 
   async sendCommand(command) {
-    if (!this.characteristics.cmd) throw new Error('Not connected to the Config Service.');
+    if (!this.characteristics.cmd) {
+      throw new Error('Not connected to the Config Service.');
+    }
+
     await this.ensureEvtSubscription();
 
     const rid = ++this.requestId;
@@ -673,19 +696,80 @@ class HotasConfigClient {
     return response;
   }
 
-  async getConfig({ markSaved = true } = {}) {
-    const response = await this.sendCommand({ cmd: 'get_config' });
-    if (response.config && typeof response.config === 'object') {
-      this.currentConfig = ensureConfigShape(response.config);
-    } else if (response.config_json) {
-      this.currentConfig = ensureConfigShape(JSON.parse(response.config_json));
+  async readConfigCharacteristic() {
+    const cfg = this.characteristics.cfg;
+    if (!cfg) {
+      throw new Error('CFG characteristic is unavailable.');
     }
 
-    if (markSaved && this.currentConfig) {
-      this.savedConfigString = configToStableString(this.currentConfig);
-      this.pendingChanges = false;
+    const value = await cfg.readValue();
+    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    const jsonText = decodeUtf8(bytes);
+
+    log('CFG read ←', `${bytes.byteLength} bytes`);
+
+    try {
+      return ensureConfigShape(JSON.parse(jsonText));
+    } catch (error) {
+      const previewStart = Math.max(0, 255 - 80);
+      const previewEnd = Math.min(jsonText.length, 255 + 120);
+      const preview = jsonText.slice(previewStart, previewEnd);
+      log('CFG read parse preview', JSON.stringify(preview));
+      throw new Error(`CFG read returned invalid JSON: ${error.message}`);
     }
-    return this.currentConfig;
+  }
+
+  async getConfig({ markSaved = true } = {}) {
+    let cmdError = null;
+
+    try {
+      const response = await this.sendCommand({ cmd: 'get_config' });
+
+      if (response?.config && typeof response.config === 'object') {
+        this.currentConfig = ensureConfigShape(response.config);
+      } else if (typeof response?.config_json === 'string') {
+        this.currentConfig = ensureConfigShape(JSON.parse(response.config_json));
+      } else if (response?.ok && response?.transport === 'cfg_read') {
+        log('get_config metadata', `transport=${response.transport} config_len=${response.config_len ?? 'unknown'}; using current/default config`);
+        this.currentConfig = this.ensureDefaultConfig(false);
+      } else {
+        throw new Error('get_config response did not include config or config_json.');
+      }
+
+      if (markSaved && this.currentConfig) {
+        this.savedConfigString = configToStableString(this.currentConfig);
+        this.pendingChanges = false;
+      }
+
+      return this.currentConfig;
+    } catch (error) {
+      cmdError = error;
+      log('get_config CMD failed', error.message || String(error));
+    }
+
+    try {
+      this.currentConfig = await this.readConfigCharacteristic();
+
+      if (markSaved && this.currentConfig) {
+        this.savedConfigString = configToStableString(this.currentConfig);
+        this.pendingChanges = false;
+      }
+
+      return this.currentConfig;
+    } catch (cfgError) {
+      throw new Error(
+        `get_config command failed: ${cmdError?.message || cmdError}; CFG fallback failed: ${cfgError?.message || cfgError}`
+      );
+    }
+  }
+
+  async tryLoadConfigNonFatal({ markSaved = true } = {}) {
+    try {
+      return await this.getConfig({ markSaved });
+    } catch (error) {
+      log('Config load warning', error.message || String(error));
+      return this.ensureDefaultConfig(markSaved);
+    }
   }
 
   async saveProfile() {
@@ -742,6 +826,7 @@ class HotasConfigClient {
     if (complete.type === 1) {
       const text = decodeUtf8(complete.bytes);
       log('EVT JSON ←', text);
+
       let payload = null;
       try {
         payload = JSON.parse(text);
@@ -757,7 +842,9 @@ class HotasConfigClient {
         pending.resolve(payload);
       }
 
-      if (Array.isArray(payload?.devices)) this.devices = payload.devices;
+      if (Array.isArray(payload?.devices)) {
+        this.devices = payload.devices;
+      }
 
       if (typeof payload?.device_id === 'number' && Array.isArray(payload?.elements)) {
         const byId = new Map();
@@ -806,7 +893,9 @@ class HotasConfigClient {
     };
 
     const meta = this.getElementMeta(sample.deviceId, sample.elementId);
-    if (meta) sample.meta = meta;
+    if (meta) {
+      sample.meta = meta;
+    }
 
     this.latestSample = sample;
     this.latestSampleByKey.set(`${sample.deviceId}:${sample.elementId}`, sample);
@@ -945,7 +1034,10 @@ class MappingWizard {
   }
 
   async confirm() {
-    if (!this.candidate) throw new Error('No candidate mapping to confirm.');
+    if (!this.candidate) {
+      throw new Error('No candidate mapping to confirm.');
+    }
+
     await this.client.applyAxisPatch(this.targetKey, this.candidate);
     tuningState.selectedAxisKey = this.targetKey;
     elements.tuneAxisSelect.value = this.targetKey;
@@ -976,16 +1068,20 @@ function refreshPreviewForSelectedAxis() {
   const axisKey = tuningState.selectedAxisKey;
   const mapping = selectedAxisConfig();
   const sample = getLatestMappedSample(axisKey, mapping);
+
   if (!sample) {
     tuningState.preview = null;
     tuningState.previewMetaKey = '';
     return;
   }
+
   const metaKey = `${sample.deviceId}:${sample.elementId}:${sample.receivedAt?.getTime?.() || 0}`;
   if (metaKey === tuningState.previewMetaKey && tuningState.preview) return;
+
   const prev = tuningState.previewMetaKey.startsWith(`${sample.deviceId}:${sample.elementId}:`)
     ? tuningState.preview?.smoothed
     : null;
+
   tuningState.preview = computePreviewFromSample(sample, axisKey, mapping, prev);
   tuningState.previewMetaKey = metaKey;
 }
@@ -1062,6 +1158,7 @@ function drawCurveEditor(axisKey, mapping) {
 
 function handleCurvePointer(event) {
   if (!tuningState.curveDragPoint) return;
+
   const rect = elements.curveSvg.getBoundingClientRect();
   const width = 360;
   const height = 240;
@@ -1077,6 +1174,7 @@ function handleCurvePointer(event) {
     next.curve = next.curve || deepClone(DEFAULT_AXIS_CONFIG.curve);
     next.curve.p1 = next.curve.p1 || { x: 0.25, y: 0.25 };
     next.curve.p2 = next.curve.p2 || { x: 0.75, y: 0.75 };
+
     if (tuningState.curveDragPoint === 'p1') {
       nx = Math.min(nx, next.curve.p2.x);
       next.curve.p1.x = nx;
@@ -1100,6 +1198,7 @@ function bindModifierControls() {
     const handler = (value) => {
       const numeric = Number(value);
       if (!Number.isFinite(numeric)) return;
+
       if (kind === 'deadzoneInner') {
         updateSelectedAxisConfig((next) => { next.deadzone.inner = numeric; });
       } else if (kind === 'outerClamp') {
@@ -1454,14 +1553,14 @@ elements.connectBtn.addEventListener('click', () => guarded(async () => {
   await client.connect();
   await client.getDevices();
   await client.loadAllDescriptors();
-  await client.getConfig();
+  await client.tryLoadConfigNonFatal({ markSaved: true });
 }, 'Unable to connect'));
 
 elements.reconnectBtn.addEventListener('click', () => guarded(async () => {
   await client.reconnect();
   await client.getDevices();
   await client.loadAllDescriptors();
-  await client.getConfig({ markSaved: false });
+  await client.tryLoadConfigNonFatal({ markSaved: false });
 }, 'Reconnect failed'));
 
 elements.disconnectBtn.addEventListener('click', () => guarded(async () => {
@@ -1552,11 +1651,15 @@ elements.wizardRetryBtn.addEventListener('click', () => guarded(async () => {
 
 elements.wizardConfirmBtn.addEventListener('click', () => guarded(async () => {
   await wizard.confirm();
-  log('Mapping applied', `${targetByKey(wizard.targetKey).label} -> device ${wizard.candidate.deviceId} element ${wizard.candidate.elementId}`);
+  log(
+    'Mapping applied',
+    `${targetByKey(wizard.targetKey).label} -> device ${wizard.candidate.deviceId} element ${wizard.candidate.elementId}`
+  );
 }, 'Failed to apply mapping'));
 
 elements.clearLogBtn.addEventListener('click', () => {
   elements.logPanel.textContent = '';
 });
 
+client.ensureDefaultConfig(true);
 render();

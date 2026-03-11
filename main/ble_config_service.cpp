@@ -97,10 +97,10 @@ static uint8_t g_last_stream_sample_buf[kStreamSampleLen];
 //   u16 offset
 //   u16 total_len
 //   u8  payload[0..(MTU-3-8)]
-static void notify_evt_chunked(uint8_t type, const uint8_t *data, uint16_t total_len) {
-  if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return;
-  if (!g_evt_notify_enabled) return;
-  if (g_evt_handle == 0) return;
+static bool notify_evt_chunked(uint8_t type, const uint8_t *data, uint16_t total_len) {
+  if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return false;
+  if (!g_evt_notify_enabled) return false;
+  if (g_evt_handle == 0) return false;
 
   const uint16_t msg_id = ++g_msg_id;
 
@@ -109,6 +109,7 @@ static void notify_evt_chunked(uint8_t type, const uint8_t *data, uint16_t total
   constexpr size_t kMaxValueLen = 20;
   constexpr size_t kHdrLen = 8;
   constexpr size_t kMaxPayload = kMaxValueLen - kHdrLen;
+  constexpr int kMaxNotifyRetries = 12;
 
   uint16_t offset = 0;
   while (offset < total_len) {
@@ -129,20 +130,63 @@ static void notify_evt_chunked(uint8_t type, const uint8_t *data, uint16_t total
       memcpy(&buf[kHdrLen], data + offset, chunk_len);
     }
 
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, kHdrLen + chunk_len);
-    if (!om) return;
-    (void)ble_gatts_notify_custom(g_conn_handle, g_evt_handle, om);
+    int rc = BLE_HS_EUNKNOWN;
+    for (int attempt = 0; attempt < kMaxNotifyRetries; ++attempt) {
+      if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE || !g_evt_notify_enabled || g_evt_handle == 0) {
+        ESP_LOGW(TAG, "EVT notify aborted mid-transfer at off=%u/%u", (unsigned)offset, (unsigned)total_len);
+        return false;
+      }
+
+      struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, kHdrLen + chunk_len);
+      if (!om) {
+        ESP_LOGW(TAG, "EVT mbuf alloc failed at off=%u/%u", (unsigned)offset, (unsigned)total_len);
+        vTaskDelay(pdMS_TO_TICKS(4));
+        continue;
+      }
+
+      rc = ble_gatts_notify_custom(g_conn_handle, g_evt_handle, om);
+      if (rc == 0) {
+        break;
+      }
+
+      ESP_LOGW(TAG,
+               "EVT notify retry rc=%d msg=%u off=%u/%u try=%d",
+               rc,
+               (unsigned)msg_id,
+               (unsigned)offset,
+               (unsigned)total_len,
+               attempt + 1);
+      vTaskDelay(pdMS_TO_TICKS(4 + attempt * 2));
+    }
+
+    if (rc != 0) {
+      ESP_LOGE(TAG,
+               "EVT notify failed rc=%d msg=%u off=%u/%u",
+               rc,
+               (unsigned)msg_id,
+               (unsigned)offset,
+               (unsigned)total_len);
+      return false;
+    }
 
     offset = (uint16_t)(offset + chunk_len);
-    if (total_len > 128) vTaskDelay(pdMS_TO_TICKS(1));
+
+    if (total_len > 128) {
+      vTaskDelay(pdMS_TO_TICKS(4));
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(1));
+    }
   }
+
+  ESP_LOGI(TAG, "EVT send complete msg=%u len=%u type=%u", (unsigned)msg_id, (unsigned)total_len, (unsigned)type);
+  return true;
 }
 
 static void notify_evt_json(const char *json) {
   if (!json) return;
   const size_t len = strlen(json);
   if (len == 0 || len > 0xFFFF) return;
-  notify_evt_chunked(1, (const uint8_t *)json, (uint16_t)len);
+  (void)notify_evt_chunked(1, (const uint8_t *)json, (uint16_t)len);
 }
 
 // -----------------------------------------------------------------------------
@@ -216,7 +260,7 @@ static void cmd_get_descriptor(cJSON *req, cJSON *resp) {
   }
 
   if (got > 0 && got <= 0xFFFF) {
-    notify_evt_chunked(2, tmp, (uint16_t)got);
+    (void)notify_evt_chunked(2, tmp, (uint16_t)got);
   }
 }
 
@@ -232,12 +276,9 @@ static void cmd_stop_stream(cJSON *resp) {
 
 static void cmd_get_config(cJSON *resp) {
   g_config_json = mapping::mapping_engine_profile_to_json();
-  cJSON *cfg = cJSON_Parse(g_config_json.c_str());
-  if (cfg) {
-    cJSON_AddItemToObject(resp, "config", cfg);
-  } else {
-    cJSON_AddStringToObject(resp, "config_json", g_config_json.c_str());
-  }
+  cJSON_AddBoolToObject(resp, "ok", true);
+  cJSON_AddNumberToObject(resp, "config_len", (double)g_config_json.size());
+  cJSON_AddStringToObject(resp, "transport", "cfg_read");
 }
 
 static void cmd_set_config(cJSON *req, cJSON *resp) {
@@ -272,8 +313,8 @@ static void cmd_set_config(cJSON *req, cJSON *resp) {
   g_config_json = mapping::mapping_engine_profile_to_json();
 
   cJSON_AddBoolToObject(resp, "ok", true);
-  cJSON *normalized = cJSON_Parse(g_config_json.c_str());
-  if (normalized) cJSON_AddItemToObject(resp, "config", normalized);
+  cJSON_AddNumberToObject(resp, "config_len", (double)g_config_json.size());
+  cJSON_AddStringToObject(resp, "transport", "cfg_read");
 }
 
 static void cmd_save_profile(cJSON *resp) {
@@ -288,8 +329,6 @@ static void cmd_save_profile(cJSON *resp) {
   cJSON_AddBoolToObject(resp, "ok", true);
   cJSON_AddStringToObject(resp, "note", "profile saved to NVS");
   cJSON_AddNumberToObject(resp, "bytes", (double)g_config_json.size());
-  cJSON *cfg = cJSON_Parse(g_config_json.c_str());
-  if (cfg) cJSON_AddItemToObject(resp, "config", cfg);
 }
 
 static void schedule_reboot(app_mode_t mode) {
