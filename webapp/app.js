@@ -115,7 +115,6 @@ for (const target of OUTPUT_TARGETS) {
   option.value = target.key;
   option.textContent = target.label;
   elements.targetSelect.appendChild(option);
-
   const tuneOption = option.cloneNode(true);
   elements.tuneAxisSelect.appendChild(tuneOption);
 }
@@ -308,7 +307,6 @@ function computePreviewFromSample(sample, axisKey, mapping, previousSmoothed = n
   const smoothed = config.smoothing_alpha <= 0 || previousSmoothed == null
     ? curved
     : previousSmoothed * (1 - config.smoothing_alpha) + curved * config.smoothing_alpha;
-
   return {
     raw,
     deadzoned,
@@ -336,6 +334,25 @@ function describeElement(meta) {
   return `${humanizeKind(meta.kind)} · ${usage} · element ${meta.element_id}`;
 }
 
+function decodeElementKind(kind) {
+  if (kind === 'a') return 'axis';
+  if (kind === 'b') return 'button';
+  if (kind === 'h') return 'hat';
+  if (kind === 'o') return 'other';
+  return kind || 'other';
+}
+
+function normalizeElementMeta(meta) {
+  if (!meta || typeof meta !== 'object') return null;
+  return {
+    element_id: Number(meta.element_id ?? meta.i ?? 0),
+    kind: decodeElementKind(meta.kind ?? meta.k),
+    usage_page: Number(meta.usage_page ?? meta.p ?? 0),
+    usage: Number(meta.usage ?? meta.u ?? 0),
+    usage_name: meta.usage_name ?? meta.n ?? 'unknown',
+  };
+}
+
 class ChunkAssembler {
   constructor() {
     this.messages = new Map();
@@ -343,7 +360,6 @@ class ChunkAssembler {
 
   push(frameBytes) {
     if (frameBytes.byteLength < 8) return null;
-
     const view = new DataView(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength);
     const version = view.getUint8(0);
     const type = view.getUint8(1);
@@ -409,6 +425,8 @@ class HotasConfigClient {
     this.pendingChanges = false;
     this.onDisconnectedBound = this.onDisconnected.bind(this);
 
+    this._cmdQueue = Promise.resolve();
+
     this.handleEvtBound = (event) => {
       const value = event.target.value;
       const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
@@ -426,25 +444,23 @@ class HotasConfigClient {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  ensureDefaultConfig(markSaved = false) {
-    this.currentConfig = ensureConfigShape(this.currentConfig || { version: 2, axes: {} });
-    if (markSaved) {
-      this.savedConfigString = configToStableString(this.currentConfig);
-      this.pendingChanges = false;
-    }
-    return this.currentConfig;
-  }
-
   resetTransientState() {
     for (const [, pending] of this.pendingJson.entries()) {
       pending.reject(new Error('Request cancelled due to reconnect/disconnect.'));
     }
     this.pendingJson.clear();
+
     this.chunkAssembler = new ChunkAssembler();
     this.pendingDescriptorBinary = null;
     this.streamActive = false;
     this.streamSubscribed = false;
     this.evtSubscribed = false;
+  }
+
+  _enqueueCommand(task) {
+    const run = this._cmdQueue.then(task, task);
+    this._cmdQueue = run.catch(() => {});
+    return run;
   }
 
   async requestDevice() {
@@ -455,12 +471,12 @@ class HotasConfigClient {
     log('Opening Bluetooth device picker');
     this.device = await navigator.bluetooth.requestDevice({
       filters: [
-        { services: [UUIDS.service] },
+        { namePrefix: 'HOTAS_CFG' },
+        { namePrefix: 'HOTAS_CONFIG' },
         { namePrefix: 'HOTAS' },
       ],
       optionalServices: [UUIDS.service],
     });
-
     log('Device selected', `${this.device.name || '(unnamed)'} [${this.device.id}]`);
     this.device.removeEventListener('gattserverdisconnected', this.onDisconnectedBound);
     this.device.addEventListener('gattserverdisconnected', this.onDisconnectedBound);
@@ -501,9 +517,7 @@ class HotasConfigClient {
     if (!reuseDevice || !this.device) {
       await this.requestDevice();
     }
-    if (!this.device) {
-      throw new Error('No Bluetooth device selected.');
-    }
+    if (!this.device) throw new Error('No Bluetooth device selected.');
 
     this.resetTransientState();
 
@@ -518,10 +532,11 @@ class HotasConfigClient {
 
     await this.ensureEvtSubscription();
 
+    // Subscribe to stream only when stream is explicitly started.
     this.streamSubscribed = false;
     this.streamActive = false;
 
-    await this.delay(350);
+    await this.delay(650);
 
     log('Connected and EVT notifications enabled');
     return true;
@@ -529,9 +544,7 @@ class HotasConfigClient {
 
   async disconnect({ intentional = true } = {}) {
     this.streamActive = false;
-    if (intentional) {
-      this.reconnectWanted = false;
-    }
+    if (intentional) this.reconnectWanted = false;
 
     this.resetTransientState();
 
@@ -555,9 +568,7 @@ class HotasConfigClient {
   }
 
   async reconnect() {
-    if (!this.device) {
-      throw new Error('No previously selected Bluetooth device to reconnect to.');
-    }
+    if (!this.device) throw new Error('No previously selected Bluetooth device to reconnect to.');
     return this.connect({ reuseDevice: true });
   }
 
@@ -577,12 +588,10 @@ class HotasConfigClient {
       const delayMs = this.reconnectAttempts * 1000;
       log(`Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} scheduled`, `${delayMs}ms`);
       await this.delay(delayMs);
-
       try {
         await this.reconnect();
         await this.getDevices();
-        await this.loadAllDescriptors();
-        await this.tryLoadConfigNonFatal({ markSaved: false });
+        await this.getConfig({ markSaved: false });
         log('Reconnect successful');
         this.reconnectAttempts = 0;
         this.reconnectInFlight = false;
@@ -599,17 +608,10 @@ class HotasConfigClient {
 
   async writeCommandText(json) {
     const cmd = this.characteristics.cmd;
-    if (!cmd) {
-      throw new Error('CMD characteristic is unavailable.');
-    }
+    if (!cmd) throw new Error('CMD characteristic is unavailable.');
 
     const data = encodeUtf8(json);
     const props = cmd.properties || {};
-
-    if (props.writeWithoutResponse && typeof cmd.writeValueWithoutResponse === 'function') {
-      await cmd.writeValueWithoutResponse(data);
-      return 'without-response';
-    }
 
     if (props.write && typeof cmd.writeValue === 'function') {
       await cmd.writeValue(data);
@@ -621,50 +623,89 @@ class HotasConfigClient {
       return 'legacy-write';
     }
 
+    if (props.writeWithoutResponse && typeof cmd.writeValueWithoutResponse === 'function') {
+      await cmd.writeValueWithoutResponse(data);
+      return 'without-response';
+    }
+
     throw new Error('CMD characteristic is not writable.');
   }
 
   async sendCommand(command) {
-    if (!this.characteristics.cmd) {
-      throw new Error('Not connected to the Config Service.');
-    }
+    return this._enqueueCommand(async () => {
+      if (!this.characteristics.cmd) throw new Error('Not connected to the Config Service.');
+      await this.ensureEvtSubscription();
 
-    await this.ensureEvtSubscription();
+      if (this.pendingJson.size === 0 && !this.pendingDescriptorBinary) {
+        this.chunkAssembler = new ChunkAssembler();
+      }
 
-    const rid = ++this.requestId;
-    const payload = { rid, ...command };
-    const json = JSON.stringify(payload);
+      const rid = ++this.requestId;
+      const payload = { rid, ...command };
+      const json = JSON.stringify(payload);
 
-    const responsePromise = new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        if (this.pendingJson.has(rid)) {
-          this.pendingJson.delete(rid);
-          reject(new Error(`Timed out waiting for response to ${payload.cmd}`));
-        }
-      }, 8000);
+      const timeoutMs = payload.cmd === 'get_descriptor'
+        ? 30000
+        : payload.cmd === 'get_devices'
+          ? 15000
+          : 8000;
 
-      this.pendingJson.set(rid, {
-        resolve: (value) => {
-          clearTimeout(timeoutId);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timeoutId);
-          reject(error);
-        },
-        payload,
+      const responsePromise = new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          if (this.pendingJson.has(rid)) {
+            this.pendingJson.delete(rid);
+            reject(new Error(`Timed out waiting for response to ${payload.cmd}`));
+          }
+        }, timeoutMs);
+
+        this.pendingJson.set(rid, {
+          resolve: (value) => {
+            clearTimeout(timeoutId);
+            resolve(value);
+          },
+          reject: (error) => {
+            clearTimeout(timeoutId);
+            reject(error);
+          },
+          payload,
+        });
       });
-    });
 
-    const writeMode = await this.writeCommandText(json);
-    log('CMD →', `${json} [${writeMode}]`);
-    return responsePromise;
+      try {
+        const writeMode = await this.writeCommandText(json);
+        log('CMD →', `${json} [${writeMode}]`);
+      } catch (error) {
+        const pending = this.pendingJson.get(rid);
+        if (pending) {
+          this.pendingJson.delete(rid);
+          pending.reject(error);
+        }
+        throw error;
+      }
+
+      return await responsePromise;
+    });
   }
 
   async getDevices() {
     const response = await this.sendCommand({ cmd: 'get_devices' });
     this.devices = Array.isArray(response.devices) ? response.devices : [];
-    if (this.selectedDeviceId == null && this.devices.length) {
+
+    const liveIds = new Set(this.devices.map((device) => device.device_id));
+    for (const key of [...this.descriptorCache.keys()]) {
+      if (!liveIds.has(key)) this.descriptorCache.delete(key);
+    }
+    for (const key of [...this.elementMetaByDevice.keys()]) {
+      if (!liveIds.has(key)) this.elementMetaByDevice.delete(key);
+    }
+
+    if (!this.devices.length) {
+      this.selectedDeviceId = null;
+      return this.devices;
+    }
+
+    const selectedStillExists = this.devices.some((device) => device.device_id === this.selectedDeviceId);
+    if (!selectedStillExists) {
       this.selectedDeviceId = this.devices[0].device_id;
     }
     return this.devices;
@@ -675,10 +716,26 @@ class HotasConfigClient {
     return this.sendCommand({ cmd: 'get_descriptor', device_id: deviceId });
   }
 
-  async loadAllDescriptors() {
+  async getElements(deviceId) {
+    const response = await this.sendCommand({ cmd: 'get_elements', device_id: deviceId });
+    if (typeof response?.device_id === 'number' && Array.isArray(response?.elements)) {
+      const byId = new Map();
+      for (const rawElement of response.elements) {
+        const element = normalizeElementMeta(rawElement);
+        if (element) {
+          byId.set(String(element.element_id), element);
+        }
+      }
+      this.elementMetaByDevice.set(response.device_id, byId);
+    }
+    return response;
+  }
+
+  async loadAllElementMetadata() {
     for (const device of this.devices) {
       if (this.elementMetaByDevice.has(device.device_id)) continue;
-      await this.getDescriptor(device.device_id);
+      await this.getElements(device.device_id);
+      await this.delay(50);
     }
   }
 
@@ -696,80 +753,19 @@ class HotasConfigClient {
     return response;
   }
 
-  async readConfigCharacteristic() {
-    const cfg = this.characteristics.cfg;
-    if (!cfg) {
-      throw new Error('CFG characteristic is unavailable.');
-    }
-
-    const value = await cfg.readValue();
-    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-    const jsonText = decodeUtf8(bytes);
-
-    log('CFG read ←', `${bytes.byteLength} bytes`);
-
-    try {
-      return ensureConfigShape(JSON.parse(jsonText));
-    } catch (error) {
-      const previewStart = Math.max(0, 255 - 80);
-      const previewEnd = Math.min(jsonText.length, 255 + 120);
-      const preview = jsonText.slice(previewStart, previewEnd);
-      log('CFG read parse preview', JSON.stringify(preview));
-      throw new Error(`CFG read returned invalid JSON: ${error.message}`);
-    }
-  }
-
   async getConfig({ markSaved = true } = {}) {
-    let cmdError = null;
-
-    try {
-      const response = await this.sendCommand({ cmd: 'get_config' });
-
-      if (response?.config && typeof response.config === 'object') {
-        this.currentConfig = ensureConfigShape(response.config);
-      } else if (typeof response?.config_json === 'string') {
-        this.currentConfig = ensureConfigShape(JSON.parse(response.config_json));
-      } else if (response?.ok && response?.transport === 'cfg_read') {
-        log('get_config metadata', `transport=${response.transport} config_len=${response.config_len ?? 'unknown'}; using current/default config`);
-        this.currentConfig = this.ensureDefaultConfig(false);
-      } else {
-        throw new Error('get_config response did not include config or config_json.');
-      }
-
-      if (markSaved && this.currentConfig) {
-        this.savedConfigString = configToStableString(this.currentConfig);
-        this.pendingChanges = false;
-      }
-
-      return this.currentConfig;
-    } catch (error) {
-      cmdError = error;
-      log('get_config CMD failed', error.message || String(error));
+    const response = await this.sendCommand({ cmd: 'get_config' });
+    if (response.config && typeof response.config === 'object') {
+      this.currentConfig = ensureConfigShape(response.config);
+    } else if (response.config_json) {
+      this.currentConfig = ensureConfigShape(JSON.parse(response.config_json));
     }
 
-    try {
-      this.currentConfig = await this.readConfigCharacteristic();
-
-      if (markSaved && this.currentConfig) {
-        this.savedConfigString = configToStableString(this.currentConfig);
-        this.pendingChanges = false;
-      }
-
-      return this.currentConfig;
-    } catch (cfgError) {
-      throw new Error(
-        `get_config command failed: ${cmdError?.message || cmdError}; CFG fallback failed: ${cfgError?.message || cfgError}`
-      );
+    if (markSaved && this.currentConfig) {
+      this.savedConfigString = configToStableString(this.currentConfig);
+      this.pendingChanges = false;
     }
-  }
-
-  async tryLoadConfigNonFatal({ markSaved = true } = {}) {
-    try {
-      return await this.getConfig({ markSaved });
-    } catch (error) {
-      log('Config load warning', error.message || String(error));
-      return this.ensureDefaultConfig(markSaved);
-    }
+    return this.currentConfig;
   }
 
   async saveProfile() {
@@ -818,15 +814,31 @@ class HotasConfigClient {
   }
 
   handleEvtNotification(bytes) {
-    log('EVT frame', `${bytes.byteLength} bytes`);
+    if (bytes.byteLength >= 8) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const version = view.getUint8(0);
+      const type = view.getUint8(1);
+      const msgId = view.getUint16(2, true);
+      const offset = view.getUint16(4, true);
+      const total = view.getUint16(6, true);
+      log('EVT frame', `${bytes.byteLength} bytes · v=${version} type=${type} msg=${msgId} off=${offset} total=${total}`);
+    } else {
+      log('EVT frame', `${bytes.byteLength} bytes`);
+    }
 
-    const complete = this.chunkAssembler.push(bytes);
+    let complete = null;
+    try {
+      complete = this.chunkAssembler.push(bytes);
+    } catch (error) {
+      showError(`EVT reassembly failed: ${error.message || error}`);
+      this.chunkAssembler = new ChunkAssembler();
+      return;
+    }
     if (!complete) return;
 
     if (complete.type === 1) {
       const text = decodeUtf8(complete.bytes);
       log('EVT JSON ←', text);
-
       let payload = null;
       try {
         payload = JSON.parse(text);
@@ -842,18 +854,17 @@ class HotasConfigClient {
         pending.resolve(payload);
       }
 
-      if (Array.isArray(payload?.devices)) {
-        this.devices = payload.devices;
-      }
-
+      if (Array.isArray(payload?.devices)) this.devices = payload.devices;
       if (typeof payload?.device_id === 'number' && Array.isArray(payload?.elements)) {
         const byId = new Map();
-        for (const element of payload.elements) {
-          byId.set(String(element.element_id), element);
+        for (const rawElement of payload.elements) {
+          const element = normalizeElementMeta(rawElement);
+          if (element) {
+            byId.set(String(element.element_id), element);
+          }
         }
         this.elementMetaByDevice.set(payload.device_id, byId);
       }
-
       if (payload?.config && typeof payload.config === 'object') {
         this.currentConfig = ensureConfigShape(payload.config);
       }
@@ -893,9 +904,7 @@ class HotasConfigClient {
     };
 
     const meta = this.getElementMeta(sample.deviceId, sample.elementId);
-    if (meta) {
-      sample.meta = meta;
-    }
+    if (meta) sample.meta = meta;
 
     this.latestSample = sample;
     this.latestSampleByKey.set(`${sample.deviceId}:${sample.elementId}`, sample);
@@ -944,7 +953,10 @@ class MappingWizard {
 
     if (!this.client.streamActive) await this.client.startStream();
     if (!this.client.devices.length) await this.client.getDevices();
-    await this.client.loadAllDescriptors();
+    if (!this.client.devices.length) {
+      throw new Error('No HID devices detected. Connect your controllers to the powered USB hub first.');
+    }
+    await this.client.loadAllElementMetadata();
 
     this.intervalId = setInterval(() => render(), 60);
     this.timeoutId = setTimeout(() => this.finish(), this.durationMs);
@@ -1034,10 +1046,7 @@ class MappingWizard {
   }
 
   async confirm() {
-    if (!this.candidate) {
-      throw new Error('No candidate mapping to confirm.');
-    }
-
+    if (!this.candidate) throw new Error('No candidate mapping to confirm.');
     await this.client.applyAxisPatch(this.targetKey, this.candidate);
     tuningState.selectedAxisKey = this.targetKey;
     elements.tuneAxisSelect.value = this.targetKey;
@@ -1068,20 +1077,16 @@ function refreshPreviewForSelectedAxis() {
   const axisKey = tuningState.selectedAxisKey;
   const mapping = selectedAxisConfig();
   const sample = getLatestMappedSample(axisKey, mapping);
-
   if (!sample) {
     tuningState.preview = null;
     tuningState.previewMetaKey = '';
     return;
   }
-
   const metaKey = `${sample.deviceId}:${sample.elementId}:${sample.receivedAt?.getTime?.() || 0}`;
   if (metaKey === tuningState.previewMetaKey && tuningState.preview) return;
-
   const prev = tuningState.previewMetaKey.startsWith(`${sample.deviceId}:${sample.elementId}:`)
     ? tuningState.preview?.smoothed
     : null;
-
   tuningState.preview = computePreviewFromSample(sample, axisKey, mapping, prev);
   tuningState.previewMetaKey = metaKey;
 }
@@ -1158,7 +1163,6 @@ function drawCurveEditor(axisKey, mapping) {
 
 function handleCurvePointer(event) {
   if (!tuningState.curveDragPoint) return;
-
   const rect = elements.curveSvg.getBoundingClientRect();
   const width = 360;
   const height = 240;
@@ -1174,7 +1178,6 @@ function handleCurvePointer(event) {
     next.curve = next.curve || deepClone(DEFAULT_AXIS_CONFIG.curve);
     next.curve.p1 = next.curve.p1 || { x: 0.25, y: 0.25 };
     next.curve.p2 = next.curve.p2 || { x: 0.75, y: 0.75 };
-
     if (tuningState.curveDragPoint === 'p1') {
       nx = Math.min(nx, next.curve.p2.x);
       next.curve.p1.x = nx;
@@ -1198,7 +1201,6 @@ function bindModifierControls() {
     const handler = (value) => {
       const numeric = Number(value);
       if (!Number.isFinite(numeric)) return;
-
       if (kind === 'deadzoneInner') {
         updateSelectedAxisConfig((next) => { next.deadzone.inner = numeric; });
       } else if (kind === 'outerClamp') {
@@ -1552,15 +1554,13 @@ async function guarded(action, fallbackMessage) {
 elements.connectBtn.addEventListener('click', () => guarded(async () => {
   await client.connect();
   await client.getDevices();
-  await client.loadAllDescriptors();
-  await client.tryLoadConfigNonFatal({ markSaved: true });
+  await client.getConfig();
 }, 'Unable to connect'));
 
 elements.reconnectBtn.addEventListener('click', () => guarded(async () => {
   await client.reconnect();
   await client.getDevices();
-  await client.loadAllDescriptors();
-  await client.tryLoadConfigNonFatal({ markSaved: false });
+  await client.getConfig({ markSaved: false });
 }, 'Reconnect failed'));
 
 elements.disconnectBtn.addEventListener('click', () => guarded(async () => {
@@ -1570,7 +1570,6 @@ elements.disconnectBtn.addEventListener('click', () => guarded(async () => {
 
 elements.refreshDevicesBtn.addEventListener('click', () => guarded(async () => {
   await client.getDevices();
-  await client.loadAllDescriptors();
 }, 'Failed to refresh devices'));
 
 elements.readConfigBtn.addEventListener('click', () => guarded(async () => {
@@ -1595,6 +1594,9 @@ elements.stopStreamBtn.addEventListener('click', () => guarded(async () => {
 elements.loadDescriptorBtn.addEventListener('click', () => guarded(async () => {
   const device = selectedDevice();
   if (!device) throw new Error('Select a device first.');
+  if (!client.elementMetaByDevice.has(device.device_id)) {
+    await client.getElements(device.device_id);
+  }
   await client.getDescriptor(device.device_id);
 }, 'Failed to load descriptor'));
 
@@ -1651,15 +1653,11 @@ elements.wizardRetryBtn.addEventListener('click', () => guarded(async () => {
 
 elements.wizardConfirmBtn.addEventListener('click', () => guarded(async () => {
   await wizard.confirm();
-  log(
-    'Mapping applied',
-    `${targetByKey(wizard.targetKey).label} -> device ${wizard.candidate.deviceId} element ${wizard.candidate.elementId}`
-  );
+  log('Mapping applied', `${targetByKey(wizard.targetKey).label} -> device ${wizard.candidate.deviceId} element ${wizard.candidate.elementId}`);
 }, 'Failed to apply mapping'));
 
 elements.clearLogBtn.addEventListener('click', () => {
   elements.logPanel.textContent = '';
 });
 
-client.ensureDefaultConfig(true);
 render();

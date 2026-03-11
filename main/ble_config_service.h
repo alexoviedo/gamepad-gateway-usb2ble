@@ -21,6 +21,10 @@ void ble_config_service_on_disconnect(void);
 // Called on GAP subscribe events.
 void ble_config_service_on_subscribe(uint16_t attr_handle, uint8_t cur_notify);
 
+// Called on GAP notify-tx completion events so the service can pace
+// chunked EVT responses and avoid exhausting NimBLE mbufs.
+void ble_config_service_on_notify_tx(uint16_t attr_handle, int status);
+
 // 60Hz tick (called from an app task) to emit STREAM notifications when enabled.
 void ble_config_service_stream_tick(void);
 

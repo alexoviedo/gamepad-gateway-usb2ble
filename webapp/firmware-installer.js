@@ -67,6 +67,21 @@ function renderInstallButton(target, manifestUrl) {
   target.appendChild(install);
 }
 
+async function validateManifestUrl(manifestUrl) {
+  const manifest = await fetchJson(manifestUrl);
+  if (!manifest || typeof manifest !== 'object') {
+    throw new Error('Manifest response was not valid JSON.');
+  }
+  if (!Array.isArray(manifest.builds) || !manifest.builds.length) {
+    throw new Error('Manifest did not contain any builds.');
+  }
+  const firstBuild = manifest.builds[0];
+  if (!Array.isArray(firstBuild.parts) || !firstBuild.parts.length) {
+    throw new Error('Manifest did not contain any flash parts.');
+  }
+  return manifest;
+}
+
 function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
@@ -193,10 +208,16 @@ async function hydrateFirmwareUi(meta, sourceUrl) {
 
   const installHost = document.getElementById('firmwareInstallHost');
   const manualManifestInput = document.getElementById('customManifestInput');
+  const shouldRenderInstaller = Boolean(document.getElementById('flashPage'));
   if (meta?.manifestUrl && support.secure) {
     try {
-      await ensureEspWebToolsLoaded();
-      renderInstallButton(installHost, meta.manifestUrl);
+      await validateManifestUrl(meta.manifestUrl);
+      if (shouldRenderInstaller && installHost) {
+        await ensureEspWebToolsLoaded();
+        renderInstallButton(installHost, meta.manifestUrl);
+      } else if (installHost) {
+        installHost.innerHTML = '<div class="empty-state">Open the full firmware flasher page to launch the browser installer.</div>';
+      }
       setStatusPill('firmwareManifestPill', 'Manifest ready', 'success');
       if (manualManifestInput && !manualManifestInput.value) manualManifestInput.value = meta.manifestUrl;
     } catch (error) {
@@ -234,8 +255,10 @@ async function loadFeedIntoUi(url) {
 async function loadCustomManifest(manifestUrl) {
   if (!manifestUrl) throw new Error('Enter a manifest URL first.');
   setStatusPill('firmwareManifestPill', 'Loading manifest', 'muted');
+  const absoluteManifestUrl = absoluteUrl(manifestUrl, window.location.href);
+  await validateManifestUrl(absoluteManifestUrl);
   await ensureEspWebToolsLoaded();
-  renderInstallButton(document.getElementById('firmwareInstallHost'), manifestUrl);
+  renderInstallButton(document.getElementById('firmwareInstallHost'), absoluteManifestUrl);
   setStatusPill('firmwareManifestPill', 'Custom manifest ready', 'success');
   setText('firmwareReleaseNotes', 'Custom manifest loaded for manual validation. Use published feeds for normal users.');
 }

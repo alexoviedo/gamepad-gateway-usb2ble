@@ -437,6 +437,12 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
     }
     return 0;
 
+  case BLE_GAP_EVENT_NOTIFY_TX:
+    if (g_is_config_mode) {
+      ble_config_service_on_notify_tx(event->notify_tx.attr_handle, event->notify_tx.status);
+    }
+    return 0;
+
   case BLE_GAP_EVENT_ENC_CHANGE: {
     struct ble_gap_conn_desc desc;
     memset(&desc, 0, sizeof(desc));
