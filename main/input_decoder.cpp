@@ -1,6 +1,5 @@
 #include "input_decoder.h"
 #include "input_elements.h"
-#include "mapping_engine.h"
 
 #include <esp_timer.h>
 
@@ -165,6 +164,43 @@ void hid_decode_report(const uint8_t *report, size_t report_size,
 
 void hid_merge_states(const HidDeviceContext *contexts, size_t num_contexts,
                       GamepadState *out_merged) {
-  if (!out_merged) return;
-  mapping::mapping_engine_compute(contexts, num_contexts, out_merged);
+  memset(out_merged, 0, sizeof(GamepadState));
+
+  for (size_t i = 0; i < num_contexts; i++) {
+    if (!contexts[i].active)
+      continue;
+
+    const GamepadState &st = contexts[i].state;
+
+    // Buttons are bitwise OR'd
+    out_merged->buttons |= st.buttons;
+
+    // Hat is prioritized ( erste non-center hat wins )
+    if (out_merged->hat == 0 && st.hat != 0) {
+      out_merged->hat = st.hat;
+    }
+
+    // For axes, we take the one with the largest absolute deflection from
+    // center (0) This allows a joystick and a mini-stick on a throttle to share
+    // X/Y without overriding each other completely, or pedals to map cleanly.
+
+    if (abs(st.x) > abs(out_merged->x))
+      out_merged->x = st.x;
+    if (abs(st.y) > abs(out_merged->y))
+      out_merged->y = st.y;
+    if (abs(st.z) > abs(out_merged->z))
+      out_merged->z = st.z;
+
+    if (abs(st.rx) > abs(out_merged->rx))
+      out_merged->rx = st.rx;
+    if (abs(st.ry) > abs(out_merged->ry))
+      out_merged->ry = st.ry;
+    if (abs(st.rz) > abs(out_merged->rz))
+      out_merged->rz = st.rz;
+
+    if (abs(st.slider1) > abs(out_merged->slider1))
+      out_merged->slider1 = st.slider1;
+    if (abs(st.slider2) > abs(out_merged->slider2))
+      out_merged->slider2 = st.slider2;
+  }
 }

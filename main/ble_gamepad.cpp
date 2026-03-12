@@ -5,6 +5,7 @@
 
 #include <esp_err.h>
 #include <esp_log.h>
+#include <nvs.h>
 #include <nvs_flash.h>
 
 // NimBLE (and esp_nimble_hci) are C headers; wrap them for C++.
@@ -123,6 +124,10 @@ static const uint8_t kHidReportMap[] = {
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool g_ble_connected = false;
 static uint8_t g_own_addr_type = BLE_OWN_ADDR_PUBLIC;
+
+static constexpr const char *kIdentityNs = "ble_ident";
+static constexpr const char *kCfgAddrKey = "cfg_addr";
+static constexpr const char *kRunAddrKey = "run_addr";
 
 static uint16_t g_hid_report_handle = 0;
 static uint16_t g_battery_level_handle = 0;
@@ -549,14 +554,86 @@ static void ble_advertise(void) {
   }
 }
 
-static void on_sync(void) {
-  uint8_t addr_type;
-  int rc = ble_hs_id_infer_auto(0, &addr_type);
+static int load_or_create_mode_random_addr(uint8_t out_addr[6]) {
+  const char *key = g_is_config_mode ? kCfgAddrKey : kRunAddrKey;
+
+  nvs_handle_t h;
+  esp_err_t err = nvs_open(kIdentityNs, NVS_READWRITE, &h);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "nvs_open(%s) failed: %s", kIdentityNs, esp_err_to_name(err));
+    return BLE_HS_ESTORE_FAIL;
+  }
+
+  size_t len = 6;
+  err = nvs_get_blob(h, key, out_addr, &len);
+  if (err == ESP_OK && len == 6) {
+    nvs_close(h);
+    return 0;
+  }
+
+  ble_addr_t addr;
+  int rc = ble_hs_id_gen_rnd(0, &addr); // 0 => static random identity address.
   if (rc != 0) {
-    ESP_LOGE(TAG, "ble_hs_id_infer_auto failed: %d", rc);
+    nvs_close(h);
+    ESP_LOGE(TAG, "ble_hs_id_gen_rnd failed: %d", rc);
+    return rc;
+  }
+
+  memcpy(out_addr, addr.val, 6);
+  err = nvs_set_blob(h, key, out_addr, 6);
+  if (err == ESP_OK) {
+    err = nvs_commit(h);
+  }
+  nvs_close(h);
+
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Persisting %s identity failed: %s", key, esp_err_to_name(err));
+    return BLE_HS_ESTORE_FAIL;
+  }
+
+  ESP_LOGI(TAG, "Created persistent %s BLE identity", g_is_config_mode ? "CONFIG" : "RUN");
+  return 0;
+}
+
+static int configure_mode_identity(void) {
+  uint8_t rnd_addr[6] = {0};
+  int rc = load_or_create_mode_random_addr(rnd_addr);
+  if (rc != 0) {
+    return rc;
+  }
+
+  rc = ble_hs_id_set_rnd(rnd_addr);
+  if (rc != 0) {
+    ESP_LOGE(TAG, "ble_hs_id_set_rnd failed: %d", rc);
+    return rc;
+  }
+
+  rc = ble_hs_id_infer_auto(0, &g_own_addr_type);
+  if (rc != 0) {
+    ESP_LOGE(TAG, "ble_hs_id_infer_auto failed after rnd addr set: %d", rc);
+    return rc;
+  }
+
+  uint8_t id_addr[6] = {0};
+  int is_nrpa = 0;
+  rc = ble_hs_id_copy_addr(BLE_ADDR_RANDOM, id_addr, &is_nrpa);
+  if (rc == 0) {
+    ESP_LOGI(TAG,
+             "%s identity addr=%02x:%02x:%02x:%02x:%02x:%02x (nrpa=%d own_addr_type=%u)",
+             g_is_config_mode ? "CONFIG" : "RUN",
+             id_addr[5], id_addr[4], id_addr[3], id_addr[2], id_addr[1], id_addr[0],
+             is_nrpa, (unsigned)g_own_addr_type);
+  }
+
+  return 0;
+}
+
+static void on_sync(void) {
+  int rc = configure_mode_identity();
+  if (rc != 0) {
+    ESP_LOGE(TAG, "configure_mode_identity failed: %d", rc);
     return;
   }
-  g_own_addr_type = addr_type;
   ble_advertise();
 }
 
@@ -617,10 +694,11 @@ static void ble_common_init(bool config_mode) {
     return;
   }
 
-  // Match the working security posture: bondable, no MITM, no SC, and no
-  // characteristic-level read encryption requirement on the input report.
+  // Keep CONFIG and RUN as distinct BLE identities. CONFIG mode does not need
+  // bonding; disabling it prevents Windows / browser-side cache pollution from
+  // the config-only GATT database. RUN mode remains bondable for stable HID use.
   ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
-  ble_hs_cfg.sm_bonding = 1;
+  ble_hs_cfg.sm_bonding = g_is_config_mode ? 0 : 1;
   ble_hs_cfg.sm_mitm = 0;
   ble_hs_cfg.sm_sc = 0;
   ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;

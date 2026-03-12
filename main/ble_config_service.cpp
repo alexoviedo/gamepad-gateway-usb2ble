@@ -13,7 +13,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
-#include <freertos/queue.h>
 
 #include <math.h>
 #include <string>
@@ -83,15 +82,6 @@ static uint16_t g_msg_id = 0;
 // Pace chunked EVT notifications so we do not exhaust NimBLE mbufs when
 // sending larger JSON payloads like descriptors or config.
 static SemaphoreHandle_t g_evt_tx_sem = nullptr;
-
-static constexpr size_t kMaxCmdBytes = 1024;
-struct CmdJob {
-  size_t len;
-  char json[kMaxCmdBytes + 1];
-};
-
-static QueueHandle_t g_cmd_queue = nullptr;
-static TaskHandle_t g_cmd_task = nullptr;
 
 static std::string g_config_json = "{}";
 static constexpr size_t kMaxConfigJsonBytes = 4096;
@@ -198,9 +188,9 @@ static const char *role_to_str(uint8_t role) {
 
 static const char *element_kind_code(InputElementKind kind) {
   switch (kind) {
-    case IE_KIND_BUTTON: return "b";
-    case IE_KIND_AXIS: return "a";
-    case IE_KIND_HAT: return "h";
+    case InputElementKind::BUTTON: return "b";
+    case InputElementKind::AXIS: return "a";
+    case InputElementKind::HAT: return "h";
     default: return "o";
   }
 }
@@ -341,8 +331,6 @@ static void cmd_save_profile(cJSON *resp) {
   if (cfg) cJSON_AddItemToObject(resp, "config", cfg);
 }
 
-static void handle_cmd_json(const char *json, size_t len);
-
 static void schedule_reboot(app_mode_t mode) {
   xTaskCreate(
       [](void *arg) {
@@ -357,16 +345,6 @@ static void cmd_reboot_to(app_mode_t mode, cJSON *resp) {
   cJSON_AddStringToObject(resp, "rebooting_to", app_mode_name(mode));
   cJSON_AddBoolToObject(resp, "ok", true);
   schedule_reboot(mode);
-}
-
-static void ble_cfg_cmd_task(void *) {
-  CmdJob job{};
-  while (true) {
-    if (xQueueReceive(g_cmd_queue, &job, portMAX_DELAY) != pdTRUE) {
-      continue;
-    }
-    handle_cmd_json(job.json, job.len);
-  }
 }
 
 static void handle_cmd_json(const char *json, size_t len) {
@@ -446,28 +424,18 @@ static int gatt_access_cfg(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt
   if (ble_uuid_cmp(ctxt->chr->uuid, (const ble_uuid_t *)&UUID_CHR_CMD) == 0) {
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
 
-    CmdJob job{};
+    constexpr size_t kMaxCmd = 1024;
+    char buf[kMaxCmd + 1];
 
     const size_t om_len = OS_MBUF_PKTLEN(ctxt->om);
-    if (om_len == 0 || om_len > kMaxCmdBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    if (om_len == 0 || om_len > kMaxCmd) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
 
-    int rc = ble_hs_mbuf_to_flat(ctxt->om, job.json, om_len, nullptr);
+    int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, om_len, nullptr);
     if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
-    job.len = om_len;
-    job.json[om_len] = '\0';
+    buf[om_len] = '\0';
 
     ESP_LOGI(TAG, "CMD write (%u bytes)", (unsigned)om_len);
-
-    if (!g_cmd_queue) {
-      ESP_LOGW(TAG, "CMD queue not initialized");
-      return BLE_ATT_ERR_UNLIKELY;
-    }
-
-    if (xQueueSend(g_cmd_queue, &job, 0) != pdTRUE) {
-      ESP_LOGW(TAG, "CMD queue full; dropping request");
-      return BLE_ATT_ERR_INSUFFICIENT_RES;
-    }
-
+    handle_cmd_json(buf, om_len);
     return 0;
   }
 
@@ -576,12 +544,16 @@ static const struct ble_gatt_svc_def *build_cfg_svcs_once() {
   g_cfg_chrs[3].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE;
   g_cfg_chrs[3].val_handle = &g_cfg_handle;
 
+  // Terminator
+  g_cfg_chrs[4] = {0};
 
   // Service
   g_cfg_svcs[0].type = BLE_GATT_SVC_TYPE_PRIMARY;
   g_cfg_svcs[0].uuid = (ble_uuid_t *)&UUID_SVC_CFG;
   g_cfg_svcs[0].characteristics = g_cfg_chrs;
 
+  // Terminator
+  g_cfg_svcs[1] = {0};
 
   built = true;
   return g_cfg_svcs;
@@ -646,17 +618,6 @@ void ble_config_service_init(void) {
 
   if (g_config_json.empty()) g_config_json = "{}";
 
-  if (!g_cmd_queue) {
-    g_cmd_queue = xQueueCreate(8, sizeof(CmdJob));
-  }
-  if (g_cmd_queue && !g_cmd_task) {
-    BaseType_t ok = xTaskCreate(ble_cfg_cmd_task, "ble_cfg_cmd", 6144, nullptr, 5, &g_cmd_task);
-    if (ok != pdPASS) {
-      ESP_LOGE(TAG, "Failed to create config command task");
-      g_cmd_task = nullptr;
-    }
-  }
-
   ESP_LOGI(TAG, "Config service init (UUID=%s)", ble_config_service_uuid_str());
 }
 
@@ -682,9 +643,6 @@ void ble_config_service_on_disconnect(void) {
   g_last_stream_valid = false;
   if (g_evt_tx_sem) {
     xSemaphoreGive(g_evt_tx_sem);
-  }
-  if (g_cmd_queue) {
-    xQueueReset(g_cmd_queue);
   }
 }
 

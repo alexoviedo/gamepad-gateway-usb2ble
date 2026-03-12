@@ -9,9 +9,7 @@ struct HidDeviceContext {
   // Current decoded state from this device alone
   GamepadState state;
   bool active;
-  uint8_t dev_addr; // USB device address
-  uint8_t iface_num; // HID interface number when known, else 0
-  uint32_t stable_device_id; // best-effort stable interface id while connected
+  uint8_t dev_addr; // USB device address to match disconnects (legacy)
 
   // Cached raw HID report descriptor for WebBLE configuration / inspection.
   // NOTE: This is copied at enumeration time. If the descriptor is larger than
