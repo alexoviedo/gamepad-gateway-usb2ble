@@ -33,11 +33,11 @@ enum class OutputAxis : uint8_t {
 };
 
 // Device key for this connection. Best-effort and deterministic while connected.
-// Currently derived from HidDeviceContext::dev_addr (a per-connection handle tag).
+// Stable for the lifetime of a connected HID interface.
 using DeviceId = uint32_t;
 
 // ElementId is stable within a device (assigned by the report descriptor parser).
-using ElementId = uint16_t;
+using ElementId = uint32_t;
 
 struct AxisSource {
   DeviceId device_id = 0;

@@ -13,6 +13,7 @@ sdkconfig.*.old
 managed_components/
 components/managed_components/
 .idf-component-manager/
+node_modules/
 
 # Editor
 .vscode/

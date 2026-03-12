@@ -1,3 +1,7 @@
+import { errorMessage, requireElement } from './shared/dom.js';
+
+/** @import { AxisConfig, BezierCurve, BridgeCommandRequest, BridgeCommandResponse, CharacteristicMap, ChunkAssemblyState, ChunkedMessage, DeviceSummary, ElementKind, ElementMeta, OutputKey, OutputTarget, PendingDescriptorBinary, PendingJsonRequest, PreviewState, ProfileConfig, StreamSample, TargetKind, WizardCandidate, WizardDetectorEntry } from './shared/hotas-types.js' */
+
 const UUIDS = {
   service: '6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a1',
   cmd: '6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a2',
@@ -6,6 +10,7 @@ const UUIDS = {
   cfg: '6b1a2d90-9c1c-4a3f-b1e0-4fd8f5b2c1a5',
 };
 
+/** @type {OutputTarget[]} */
 const OUTPUT_TARGETS = [
   { key: 'x', label: 'Aileron', prompt: 'Move your roll control left and right.' },
   { key: 'y', label: 'Elevator', prompt: 'Move your pitch control forward and back.' },
@@ -18,6 +23,7 @@ const OUTPUT_TARGETS = [
   { key: 'hat', label: 'Hat Switch', prompt: 'Move the POV hat in a few directions.' },
 ];
 
+/** @type {Record<OutputKey, TargetKind>} */
 const TARGET_KIND = {
   x: 'axis',
   y: 'axis',
@@ -30,6 +36,7 @@ const TARGET_KIND = {
   hat: 'hat',
 };
 
+/** @type {AxisConfig} */
 const DEFAULT_AXIS_CONFIG = Object.freeze({
   configured: false,
   device_id: 0,
@@ -38,12 +45,22 @@ const DEFAULT_AXIS_CONFIG = Object.freeze({
   deadzone: { inner: 0, outer: 0 },
   smoothing_alpha: 0,
   curve: {
-    type: 'bezier',
+    type: /** @type {'bezier'} */ ('bezier'),
     p1: { x: 0.25, y: 0.25 },
     p2: { x: 0.75, y: 0.75 },
   },
 });
 
+/**
+ * @typedef {Object} TuningState
+ * @property {OutputKey} selectedAxisKey
+ * @property {'p1'|'p2'|null} curveDragPoint
+ * @property {number | null} applyTimer
+ * @property {PreviewState | null} preview
+ * @property {string} previewMetaKey
+ */
+
+/** @type {TuningState} */
 const tuningState = {
   selectedAxisKey: 'z',
   curveDragPoint: null,
@@ -53,59 +70,59 @@ const tuningState = {
 };
 
 const elements = {
-  connectBtn: document.getElementById('connectBtn'),
-  reconnectBtn: document.getElementById('reconnectBtn'),
-  disconnectBtn: document.getElementById('disconnectBtn'),
-  refreshDevicesBtn: document.getElementById('refreshDevicesBtn'),
-  readConfigBtn: document.getElementById('readConfigBtn'),
-  saveProfileBtn: document.getElementById('saveProfileBtn'),
-  startStreamBtn: document.getElementById('startStreamBtn'),
-  stopStreamBtn: document.getElementById('stopStreamBtn'),
-  loadDescriptorBtn: document.getElementById('loadDescriptorBtn'),
-  copyDescriptorBtn: document.getElementById('copyDescriptorBtn'),
-  downloadDescriptorBtn: document.getElementById('downloadDescriptorBtn'),
-  clearLogBtn: document.getElementById('clearLogBtn'),
-  connBadge: document.getElementById('connBadge'),
-  streamBadge: document.getElementById('streamBadge'),
-  configBadge: document.getElementById('configBadge'),
-  sampleRateBadge: document.getElementById('sampleRateBadge'),
-  deviceName: document.getElementById('deviceName'),
-  gattState: document.getElementById('gattState'),
-  evtState: document.getElementById('evtState'),
-  streamState: document.getElementById('streamState'),
-  deviceCount: document.getElementById('deviceCount'),
-  deviceList: document.getElementById('deviceList'),
-  descriptorMeta: document.getElementById('descriptorMeta'),
-  descriptorHex: document.getElementById('descriptorHex'),
-  telemetryList: document.getElementById('telemetryList'),
-  latestSample: document.getElementById('latestSample'),
-  logPanel: document.getElementById('logPanel'),
-  errorBanner: document.getElementById('errorBanner'),
-  serviceUuidText: document.getElementById('serviceUuidText'),
-  targetSelect: document.getElementById('targetSelect'),
-  wizardStartBtn: document.getElementById('wizardStartBtn'),
-  wizardConfirmBtn: document.getElementById('wizardConfirmBtn'),
-  wizardRetryBtn: document.getElementById('wizardRetryBtn'),
-  wizardProgressFill: document.getElementById('wizardProgressFill'),
-  wizardPrompt: document.getElementById('wizardPrompt'),
-  wizardStatus: document.getElementById('wizardStatus'),
-  wizardDetected: document.getElementById('wizardDetected'),
-  wizardPreview: document.getElementById('wizardPreview'),
-  mappingList: document.getElementById('mappingList'),
-  tuneAxisSelect: document.getElementById('tuneAxisSelect'),
-  resetModifiersBtn: document.getElementById('resetModifiersBtn'),
-  deadzoneInnerRange: document.getElementById('deadzoneInnerRange'),
-  deadzoneInnerInput: document.getElementById('deadzoneInnerInput'),
-  outerClampRange: document.getElementById('outerClampRange'),
-  outerClampInput: document.getElementById('outerClampInput'),
-  smoothingRange: document.getElementById('smoothingRange'),
-  smoothingInput: document.getElementById('smoothingInput'),
-  curveSvg: document.getElementById('curveSvg'),
-  curveStatus: document.getElementById('curveStatus'),
-  previewRaw: document.getElementById('previewRaw'),
-  previewDeadzoned: document.getElementById('previewDeadzoned'),
-  previewCurved: document.getElementById('previewCurved'),
-  previewSmoothed: document.getElementById('previewSmoothed'),
+  connectBtn: /** @type {HTMLButtonElement} */ (requireElement('connectBtn')),
+  reconnectBtn: /** @type {HTMLButtonElement} */ (requireElement('reconnectBtn')),
+  disconnectBtn: /** @type {HTMLButtonElement} */ (requireElement('disconnectBtn')),
+  refreshDevicesBtn: /** @type {HTMLButtonElement} */ (requireElement('refreshDevicesBtn')),
+  readConfigBtn: /** @type {HTMLButtonElement} */ (requireElement('readConfigBtn')),
+  saveProfileBtn: /** @type {HTMLButtonElement} */ (requireElement('saveProfileBtn')),
+  startStreamBtn: /** @type {HTMLButtonElement} */ (requireElement('startStreamBtn')),
+  stopStreamBtn: /** @type {HTMLButtonElement} */ (requireElement('stopStreamBtn')),
+  loadDescriptorBtn: /** @type {HTMLButtonElement} */ (requireElement('loadDescriptorBtn')),
+  copyDescriptorBtn: /** @type {HTMLButtonElement} */ (requireElement('copyDescriptorBtn')),
+  downloadDescriptorBtn: /** @type {HTMLButtonElement} */ (requireElement('downloadDescriptorBtn')),
+  clearLogBtn: /** @type {HTMLButtonElement} */ (requireElement('clearLogBtn')),
+  connBadge: /** @type {HTMLElement} */ (requireElement('connBadge')),
+  streamBadge: /** @type {HTMLElement} */ (requireElement('streamBadge')),
+  configBadge: /** @type {HTMLElement} */ (requireElement('configBadge')),
+  sampleRateBadge: /** @type {HTMLElement} */ (requireElement('sampleRateBadge')),
+  deviceName: /** @type {HTMLElement} */ (requireElement('deviceName')),
+  gattState: /** @type {HTMLElement} */ (requireElement('gattState')),
+  evtState: /** @type {HTMLElement} */ (requireElement('evtState')),
+  streamState: /** @type {HTMLElement} */ (requireElement('streamState')),
+  deviceCount: /** @type {HTMLElement} */ (requireElement('deviceCount')),
+  deviceList: /** @type {HTMLElement} */ (requireElement('deviceList')),
+  descriptorMeta: /** @type {HTMLElement} */ (requireElement('descriptorMeta')),
+  descriptorHex: /** @type {HTMLElement} */ (requireElement('descriptorHex')),
+  telemetryList: /** @type {HTMLElement} */ (requireElement('telemetryList')),
+  latestSample: /** @type {HTMLElement} */ (requireElement('latestSample')),
+  logPanel: /** @type {HTMLElement} */ (requireElement('logPanel')),
+  errorBanner: /** @type {HTMLElement} */ (requireElement('errorBanner')),
+  serviceUuidText: /** @type {HTMLElement} */ (requireElement('serviceUuidText')),
+  targetSelect: /** @type {HTMLSelectElement} */ (requireElement('targetSelect')),
+  wizardStartBtn: /** @type {HTMLButtonElement} */ (requireElement('wizardStartBtn')),
+  wizardConfirmBtn: /** @type {HTMLButtonElement} */ (requireElement('wizardConfirmBtn')),
+  wizardRetryBtn: /** @type {HTMLButtonElement} */ (requireElement('wizardRetryBtn')),
+  wizardProgressFill: /** @type {HTMLElement} */ (requireElement('wizardProgressFill')),
+  wizardPrompt: /** @type {HTMLElement} */ (requireElement('wizardPrompt')),
+  wizardStatus: /** @type {HTMLElement} */ (requireElement('wizardStatus')),
+  wizardDetected: /** @type {HTMLElement} */ (requireElement('wizardDetected')),
+  wizardPreview: /** @type {HTMLElement} */ (requireElement('wizardPreview')),
+  mappingList: /** @type {HTMLElement} */ (requireElement('mappingList')),
+  tuneAxisSelect: /** @type {HTMLSelectElement} */ (requireElement('tuneAxisSelect')),
+  resetModifiersBtn: /** @type {HTMLButtonElement} */ (requireElement('resetModifiersBtn')),
+  deadzoneInnerRange: /** @type {HTMLInputElement} */ (requireElement('deadzoneInnerRange')),
+  deadzoneInnerInput: /** @type {HTMLInputElement} */ (requireElement('deadzoneInnerInput')),
+  outerClampRange: /** @type {HTMLInputElement} */ (requireElement('outerClampRange')),
+  outerClampInput: /** @type {HTMLInputElement} */ (requireElement('outerClampInput')),
+  smoothingRange: /** @type {HTMLInputElement} */ (requireElement('smoothingRange')),
+  smoothingInput: /** @type {HTMLInputElement} */ (requireElement('smoothingInput')),
+  curveSvg: /** @type {SVGSVGElement} */ (requireElement('curveSvg')),
+  curveStatus: /** @type {HTMLElement} */ (requireElement('curveStatus')),
+  previewRaw: /** @type {HTMLElement} */ (requireElement('previewRaw')),
+  previewDeadzoned: /** @type {HTMLElement} */ (requireElement('previewDeadzoned')),
+  previewCurved: /** @type {HTMLElement} */ (requireElement('previewCurved')),
+  previewSmoothed: /** @type {HTMLElement} */ (requireElement('previewSmoothed')),
 };
 
 elements.serviceUuidText.textContent = UUIDS.service;
@@ -115,38 +132,52 @@ for (const target of OUTPUT_TARGETS) {
   option.value = target.key;
   option.textContent = target.label;
   elements.targetSelect.appendChild(option);
-  const tuneOption = option.cloneNode(true);
+  const tuneOption = /** @type {HTMLOptionElement} */ (option.cloneNode(true));
   elements.tuneAxisSelect.appendChild(tuneOption);
 }
 
 elements.targetSelect.value = 'z';
 elements.tuneAxisSelect.value = 'z';
 
+/** @returns {string} */
 function nowLabel() {
   return new Date().toLocaleTimeString();
 }
 
+/**
+ * @param {string} message
+ * @param {string} [detail='']
+ * @returns {void}
+ */
 function log(message, detail = '') {
   const line = `[${nowLabel()}] ${message}${detail ? ` ${detail}` : ''}`;
   elements.logPanel.textContent += `${line}\n`;
   elements.logPanel.scrollTop = elements.logPanel.scrollHeight;
 }
 
+/** @param {string} message */
 function showError(message) {
   elements.errorBanner.textContent = message;
   elements.errorBanner.classList.remove('hidden');
   log('ERROR', message);
 }
 
+/** @returns {void} */
 function clearError() {
   elements.errorBanner.textContent = '';
   elements.errorBanner.classList.add('hidden');
 }
 
+/** @param {Uint8Array} bytes */
 function bytesToHex(bytes) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * @param {Uint8Array} bytes
+ * @param {number} [width=16]
+ * @returns {string}
+ */
 function formatHexBlock(bytes, width = 16) {
   const lines = [];
   for (let offset = 0; offset < bytes.length; offset += width) {
@@ -158,49 +189,103 @@ function formatHexBlock(bytes, width = 16) {
   return lines.join('\n');
 }
 
+/** @param {Uint8Array} bytes */
 function decodeUtf8(bytes) {
   return new TextDecoder().decode(bytes);
 }
 
+/** @param {string} value */
 function encodeUtf8(value) {
   return new TextEncoder().encode(value);
 }
 
+/** @param {number} value */
 function formatQ15(value) {
   return (value / 32767).toFixed(4);
 }
 
+/**
+ * @template T
+ * @param {T} value
+ * @returns {T}
+ */
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+/** @param {unknown} config */
 function configToStableString(config) {
   return JSON.stringify(config ?? {});
 }
 
+/**
+ * @param {number} value
+ * @param {number} min
+ * @param {number} max
+ * @returns {number}
+ */
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+/** @param {number} value */
 function round3(value) {
   return Math.round(value * 1000) / 1000;
 }
 
+/** @param {unknown} value
+ * @returns {Record<string, unknown>}
+ */
+function asRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? /** @type {Record<string, unknown>} */ (value)
+    : {};
+}
+
+/** @param {unknown} value
+ * @returns {value is OutputKey}
+ */
+function isOutputKey(value) {
+  return typeof value === 'string' && OUTPUT_TARGETS.some((target) => target.key === value);
+}
+
+/** @param {number | null | undefined} value
+ * @returns {number | undefined}
+ */
+function timerValue(value) {
+  return value == null ? undefined : value;
+}
+
+/** @param {number} value
+ * @returns {string}
+ */
+function inputNumber(value) {
+  return String(value);
+}
+
+/**
+ * @param {unknown} target
+ * @param {unknown} patch
+ * @returns {unknown}
+ */
 function deepMerge(target, patch) {
   if (patch == null || typeof patch !== 'object' || Array.isArray(patch)) return patch;
-  const out = Array.isArray(target) ? [...target] : { ...(target || {}) };
-  for (const [key, value] of Object.entries(patch)) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      out[key] = deepMerge(out[key], value);
-    } else {
-      out[key] = value;
-    }
+  const out = /** @type {Record<string, unknown>} */ ({ ...asRecord(target) });
+  for (const [key, value] of Object.entries(asRecord(patch))) {
+    out[key] = value && typeof value === 'object' && !Array.isArray(value)
+      ? deepMerge(out[key], value)
+      : value;
   }
   return out;
 }
 
+
+/**
+ * @param {Partial<AxisConfig> | null | undefined} mapping
+ * @returns {AxisConfig}
+ */
 function normalizeAxisConfig(mapping) {
-  const merged = deepMerge(DEFAULT_AXIS_CONFIG, mapping || {});
+  const merged = /** @type {AxisConfig & { deadzone?: number | { inner?: number, outer?: number }, curve?: Partial<BezierCurve> }} */ (deepMerge(DEFAULT_AXIS_CONFIG, mapping || {}));
   if (typeof merged.deadzone === 'number') {
     merged.deadzone = { inner: merged.deadzone, outer: 0 };
   }
@@ -212,7 +297,7 @@ function normalizeAxisConfig(mapping) {
     merged.deadzone.outer = Math.max(0, 0.98 - merged.deadzone.inner);
   }
   merged.smoothing_alpha = clamp(Number(merged.smoothing_alpha || 0), 0, 1);
-  merged.curve = deepMerge(DEFAULT_AXIS_CONFIG.curve, merged.curve || {});
+  merged.curve = /** @type {BezierCurve} */ (deepMerge(DEFAULT_AXIS_CONFIG.curve, merged.curve || {}));
   merged.curve.p1 = {
     x: clamp(Number(merged.curve?.p1?.x ?? 0.25), 0, 1),
     y: clamp(Number(merged.curve?.p1?.y ?? 0.25), 0, 1),
@@ -229,8 +314,12 @@ function normalizeAxisConfig(mapping) {
   return merged;
 }
 
+/**
+ * @param {unknown} [config]
+ * @returns {ProfileConfig}
+ */
 function ensureConfigShape(config) {
-  const shaped = deepClone(config || { version: 2, axes: {} });
+  const shaped = /** @type {ProfileConfig} */ (deepClone(config || { version: 2, axes: {} }));
   shaped.version = 2;
   shaped.axes = shaped.axes || {};
   for (const target of OUTPUT_TARGETS) {
@@ -241,15 +330,29 @@ function ensureConfigShape(config) {
   return shaped;
 }
 
+/** @param {OutputKey} axisKey */
 function isSliderAxis(axisKey) {
   return axisKey === 'slider1' || axisKey === 'slider2';
 }
 
+/**
+ * @param {number} a
+ * @param {number} b
+ * @param {number} c
+ * @param {number} d
+ * @param {number} t
+ * @returns {number}
+ */
 function cubicBezier(a, b, c, d, t) {
   const mt = 1 - t;
   return mt * mt * mt * a + 3 * mt * mt * t * b + 3 * mt * t * t * c + t * t * t * d;
 }
 
+/**
+ * @param {number} x
+ * @param {BezierCurve | null | undefined} curve
+ * @returns {number}
+ */
 function applyBezier01(x, curve) {
   const p1x = clamp(Number(curve?.p1?.x ?? 0.25), 0, 1);
   const p1y = clamp(Number(curve?.p1?.y ?? 0.25), 0, 1);
@@ -268,6 +371,12 @@ function applyBezier01(x, curve) {
   return clamp(cubicBezier(0, p1y, p2y, 1, t), 0, 1);
 }
 
+/**
+ * @param {number} v
+ * @param {number} inner
+ * @param {number} outer
+ * @returns {number}
+ */
 function applyDeadzoneBipolar(v, inner, outer) {
   inner = clamp(inner, 0, 0.99);
   outer = clamp(outer, 0, 0.99);
@@ -281,6 +390,12 @@ function applyDeadzoneBipolar(v, inner, outer) {
   return sign * ((mag - inner) / (limit - inner));
 }
 
+/**
+ * @param {number} v
+ * @param {number} inner
+ * @param {number} outer
+ * @returns {number}
+ */
 function applyDeadzoneUnipolar(v, inner, outer) {
   inner = clamp(inner, 0, 0.99);
   outer = clamp(outer, 0, 0.99);
@@ -293,8 +408,26 @@ function applyDeadzoneUnipolar(v, inner, outer) {
   return (v - inner) / (limit - inner);
 }
 
+/**
+ * @param {StreamSample | null} sample
+ * @param {OutputKey} axisKey
+ * @param {AxisConfig | null | undefined} mapping
+ * @param {number | null} [previousSmoothed=null]
+ * @returns {PreviewState}
+ */
 function computePreviewFromSample(sample, axisKey, mapping, previousSmoothed = null) {
   const config = normalizeAxisConfig(mapping);
+  if (!sample) {
+    return {
+      raw: 0,
+      deadzoned: 0,
+      curved: 0,
+      smoothed: 0,
+      markerInput: 0,
+      markerOutput: 0,
+      updatedAt: null,
+    };
+  }
   const slider = isSliderAxis(axisKey);
   let raw = slider ? clamp((sample.norm + 1) * 0.5, 0, 1) : clamp(sample.norm, -1, 1);
   if (config.invert) raw = slider ? 1 - raw : -raw;
@@ -318,6 +451,7 @@ function computePreviewFromSample(sample, axisKey, mapping, previousSmoothed = n
   };
 }
 
+/** @param {string | null | undefined} kind */
 function humanizeKind(kind) {
   if (!kind) return 'unknown';
   if (kind === 'axis') return 'Axis';
@@ -326,6 +460,7 @@ function humanizeKind(kind) {
   return kind;
 }
 
+/** @param {ElementMeta | null | undefined} meta */
 function describeElement(meta) {
   if (!meta) return 'Unknown element';
   const usage = meta.usage_name && meta.usage_name !== 'unknown'
@@ -334,30 +469,42 @@ function describeElement(meta) {
   return `${humanizeKind(meta.kind)} · ${usage} · element ${meta.element_id}`;
 }
 
+/** @param {string | null | undefined} kind
+ * @returns {ElementKind}
+ */
 function decodeElementKind(kind) {
   if (kind === 'a') return 'axis';
   if (kind === 'b') return 'button';
   if (kind === 'h') return 'hat';
   if (kind === 'o') return 'other';
-  return kind || 'other';
+  return 'other';
 }
 
+/**
+ * @param {unknown} meta
+ * @returns {ElementMeta | null}
+ */
 function normalizeElementMeta(meta) {
   if (!meta || typeof meta !== 'object') return null;
+  const raw = asRecord(meta);
   return {
-    element_id: Number(meta.element_id ?? meta.i ?? 0),
-    kind: decodeElementKind(meta.kind ?? meta.k),
-    usage_page: Number(meta.usage_page ?? meta.p ?? 0),
-    usage: Number(meta.usage ?? meta.u ?? 0),
-    usage_name: meta.usage_name ?? meta.n ?? 'unknown',
+    element_id: Number(raw.element_id ?? raw.i ?? 0),
+    kind: decodeElementKind(typeof raw.kind === 'string' ? raw.kind : (typeof raw.k === 'string' ? raw.k : undefined)),
+    usage_page: Number(raw.usage_page ?? raw.p ?? 0),
+    usage: Number(raw.usage ?? raw.u ?? 0),
+    usage_name: String(raw.usage_name ?? raw.n ?? 'unknown'),
   };
 }
 
 class ChunkAssembler {
   constructor() {
+    /** @type {Map<number, ChunkAssemblyState>} */
     this.messages = new Map();
   }
 
+/** @param {Uint8Array} frameBytes
+ * @returns {ChunkedMessage | null}
+ */
   push(frameBytes) {
     if (frameBytes.byteLength < 8) return null;
     const view = new DataView(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength);
@@ -380,6 +527,7 @@ class ChunkAssembler {
     }
 
     const state = this.messages.get(msgId);
+    if (!state) return null;
     if (!state.offsets.has(offset)) {
       state.buffer.set(payload, offset);
       state.offsets.add(offset);
@@ -397,49 +545,84 @@ class ChunkAssembler {
 
 class HotasConfigClient {
   constructor() {
+    /** @type {BluetoothDevice | null} */
     this.device = null;
+    /** @type {BluetoothRemoteGATTServer | null} */
     this.server = null;
+    /** @type {BluetoothRemoteGATTService | null} */
     this.service = null;
+    /** @type {CharacteristicMap} */
     this.characteristics = {};
+    /** @type {number} */
     this.requestId = 0;
+    /** @type {ChunkAssembler} */
     this.chunkAssembler = new ChunkAssembler();
+    /** @type {Map<number, PendingJsonRequest>} */
     this.pendingJson = new Map();
+    /** @type {PendingDescriptorBinary | null} */
     this.pendingDescriptorBinary = null;
+    /** @type {DeviceSummary[]} */
     this.devices = [];
+    /** @type {number | null} */
     this.selectedDeviceId = null;
+    /** @type {Map<number, Uint8Array>} */
     this.descriptorCache = new Map();
+    /** @type {Map<number, Map<string, ElementMeta>>} */
     this.elementMetaByDevice = new Map();
+    /** @type {StreamSample[]} */
     this.sampleHistory = [];
+    /** @type {number[]} */
     this.sampleTimestamps = [];
+    /** @type {StreamSample | null} */
     this.latestSample = null;
+    /** @type {Map<string, StreamSample>} */
     this.latestSampleByKey = new Map();
+    /** @type {boolean} */
     this.streamActive = false;
+    /** @type {boolean} */
     this.streamSubscribed = false;
+    /** @type {boolean} */
     this.evtSubscribed = false;
+    /** @type {boolean} */
     this.reconnectWanted = false;
+    /** @type {boolean} */
     this.reconnectInFlight = false;
+    /** @type {number} */
     this.reconnectAttempts = 0;
+    /** @type {number} */
     this.maxReconnectAttempts = 4;
+    /** @type {ProfileConfig | null} */
     this.currentConfig = null;
+    /** @type {string} */
     this.savedConfigString = '';
+    /** @type {boolean} */
     this.pendingChanges = false;
+    /** @type {() => Promise<void>} */
     this.onDisconnectedBound = this.onDisconnected.bind(this);
 
+    /** @type {Promise<BridgeCommandResponse | void>} */
     this._cmdQueue = Promise.resolve();
 
+    /** @type {(event: Event) => void} */
     this.handleEvtBound = (event) => {
-      const value = event.target.value;
+      const target = /** @type {BluetoothRemoteGATTCharacteristic} */ (event.target);
+      const value = target.value;
+      if (!value) return;
       const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
       this.handleEvtNotification(bytes);
     };
 
+    /** @type {(event: Event) => void} */
     this.handleStreamBound = (event) => {
-      const value = event.target.value;
+      const target = /** @type {BluetoothRemoteGATTCharacteristic} */ (event.target);
+      const value = target.value;
+      if (!value) return;
       const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
       this.handleStreamNotification(bytes);
     };
   }
 
+  /** @param {number} ms */
   delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -457,12 +640,14 @@ class HotasConfigClient {
     this.evtSubscribed = false;
   }
 
+  /** @param {() => Promise<BridgeCommandResponse>} task */
   _enqueueCommand(task) {
     const run = this._cmdQueue.then(task, task);
     this._cmdQueue = run.catch(() => {});
     return run;
   }
 
+  /** @returns {Promise<BluetoothDevice>} */
   async requestDevice() {
     if (!navigator.bluetooth) {
       throw new Error('Web Bluetooth is not available in this browser. Use Chrome or Edge on desktop.');
@@ -485,6 +670,7 @@ class HotasConfigClient {
     return this.device;
   }
 
+  /** @returns {Promise<void>} */
   async ensureEvtSubscription() {
     if (!this.characteristics.evt) {
       throw new Error('EVT characteristic is unavailable.');
@@ -498,6 +684,7 @@ class HotasConfigClient {
     log('EVT notifications subscribed');
   }
 
+  /** @returns {Promise<void>} */
   async ensureStreamSubscription() {
     if (!this.characteristics.stream) {
       throw new Error('STREAM characteristic is unavailable.');
@@ -511,6 +698,7 @@ class HotasConfigClient {
     log('STREAM notifications subscribed');
   }
 
+  /** @param {{ reuseDevice?: boolean }} [options={}] */
   async connect({ reuseDevice = false } = {}) {
     clearError();
 
@@ -522,6 +710,7 @@ class HotasConfigClient {
     this.resetTransientState();
 
     log('Connecting to GATT server', this.device.name || this.device.id);
+    if (!this.device.gatt) throw new Error('Selected Bluetooth device does not expose GATT.');
     this.server = await this.device.gatt.connect();
     this.service = await this.server.getPrimaryService(UUIDS.service);
 
@@ -542,6 +731,7 @@ class HotasConfigClient {
     return true;
   }
 
+  /** @param {{ intentional?: boolean }} [options={}] */
   async disconnect({ intentional = true } = {}) {
     this.streamActive = false;
     if (intentional) this.reconnectWanted = false;
@@ -559,7 +749,7 @@ class HotasConfigClient {
         this.device.gatt.disconnect();
       }
     } catch (error) {
-      log('Disconnect warning', error.message || String(error));
+      log('Disconnect warning', errorMessage(error));
     }
 
     this.server = null;
@@ -567,11 +757,13 @@ class HotasConfigClient {
     this.characteristics = {};
   }
 
+  /** @returns {Promise<boolean>} */
   async reconnect() {
     if (!this.device) throw new Error('No previously selected Bluetooth device to reconnect to.');
     return this.connect({ reuseDevice: true });
   }
 
+  /** @returns {Promise<void>} */
   async onDisconnected() {
     log('Device disconnected unexpectedly');
     this.server = null;
@@ -598,7 +790,7 @@ class HotasConfigClient {
         render();
         return;
       } catch (error) {
-        log('Reconnect failed', error.message || String(error));
+        log('Reconnect failed', errorMessage(error));
       }
     }
 
@@ -606,6 +798,7 @@ class HotasConfigClient {
     showError('Connection dropped and automatic reconnect did not succeed. Press Reconnect to try again.');
   }
 
+  /** @param {string} json */
   async writeCommandText(json) {
     const cmd = this.characteristics.cmd;
     if (!cmd) throw new Error('CMD characteristic is unavailable.');
@@ -631,6 +824,9 @@ class HotasConfigClient {
     throw new Error('CMD characteristic is not writable.');
   }
 
+  /** @param {BridgeCommandRequest} command
+   * @returns {Promise<BridgeCommandResponse>}
+   */
   async sendCommand(command) {
     return this._enqueueCommand(async () => {
       if (!this.characteristics.cmd) throw new Error('Not connected to the Config Service.');
@@ -687,6 +883,7 @@ class HotasConfigClient {
     });
   }
 
+  /** @returns {Promise<DeviceSummary[]>} */
   async getDevices() {
     const response = await this.sendCommand({ cmd: 'get_devices' });
     this.devices = Array.isArray(response.devices) ? response.devices : [];
@@ -711,11 +908,17 @@ class HotasConfigClient {
     return this.devices;
   }
 
+  /** @param {number} deviceId
+   * @returns {Promise<BridgeCommandResponse>}
+   */
   async getDescriptor(deviceId) {
     this.pendingDescriptorBinary = { deviceId, rid: this.requestId + 1 };
     return this.sendCommand({ cmd: 'get_descriptor', device_id: deviceId });
   }
 
+  /** @param {number} deviceId
+   * @returns {Promise<BridgeCommandResponse>}
+   */
   async getElements(deviceId) {
     const response = await this.sendCommand({ cmd: 'get_elements', device_id: deviceId });
     if (typeof response?.device_id === 'number' && Array.isArray(response?.elements)) {
@@ -731,6 +934,7 @@ class HotasConfigClient {
     return response;
   }
 
+  /** @returns {Promise<void>} */
   async loadAllElementMetadata() {
     for (const device of this.devices) {
       if (this.elementMetaByDevice.has(device.device_id)) continue;
@@ -739,6 +943,7 @@ class HotasConfigClient {
     }
   }
 
+  /** @returns {Promise<BridgeCommandResponse>} */
   async startStream() {
     await this.ensureEvtSubscription();
     await this.ensureStreamSubscription();
@@ -747,12 +952,16 @@ class HotasConfigClient {
     return response;
   }
 
+  /** @returns {Promise<BridgeCommandResponse>} */
   async stopStream() {
     const response = await this.sendCommand({ cmd: 'stop_stream' });
     this.streamActive = false;
     return response;
   }
 
+  /** @param {{ markSaved?: boolean }} [options={}]
+   * @returns {Promise<ProfileConfig | null>}
+   */
   async getConfig({ markSaved = true } = {}) {
     const response = await this.sendCommand({ cmd: 'get_config' });
     if (response.config && typeof response.config === 'object') {
@@ -768,6 +977,7 @@ class HotasConfigClient {
     return this.currentConfig;
   }
 
+  /** @returns {Promise<BridgeCommandResponse>} */
   async saveProfile() {
     const response = await this.sendCommand({ cmd: 'save_profile' });
     if (response.ok && this.currentConfig) {
@@ -777,6 +987,10 @@ class HotasConfigClient {
     return response;
   }
 
+  /** @param {OutputKey} axisKey
+   * @param {AxisConfig} axisConfig
+   * @returns {Promise<BridgeCommandResponse>}
+   */
   async applyAxisConfig(axisKey, axisConfig) {
     const normalized = normalizeAxisConfig(axisConfig);
     const patch = {
@@ -798,6 +1012,10 @@ class HotasConfigClient {
     return response;
   }
 
+  /** @param {OutputKey} axisKey
+   * @param {WizardCandidate} candidate
+   * @returns {Promise<BridgeCommandResponse>}
+   */
   async applyAxisPatch(axisKey, candidate) {
     const existing = normalizeAxisConfig(this.currentConfig?.axes?.[axisKey]);
     const next = {
@@ -809,10 +1027,15 @@ class HotasConfigClient {
     return this.applyAxisConfig(axisKey, next);
   }
 
+  /** @param {number} deviceId
+   * @param {number} elementId
+   * @returns {ElementMeta | null}
+   */
   getElementMeta(deviceId, elementId) {
     return this.elementMetaByDevice.get(deviceId)?.get(String(elementId)) || null;
   }
 
+  /** @param {Uint8Array} bytes */
   handleEvtNotification(bytes) {
     if (bytes.byteLength >= 8) {
       const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -830,7 +1053,7 @@ class HotasConfigClient {
     try {
       complete = this.chunkAssembler.push(bytes);
     } catch (error) {
-      showError(`EVT reassembly failed: ${error.message || error}`);
+      showError(`EVT reassembly failed: ${errorMessage(error)}`);
       this.chunkAssembler = new ChunkAssembler();
       return;
     }
@@ -843,15 +1066,16 @@ class HotasConfigClient {
       try {
         payload = JSON.parse(text);
       } catch (error) {
-        showError(`Received malformed JSON EVT payload: ${error.message}`);
+        showError(`Received malformed JSON EVT payload: ${errorMessage(error)}`);
         return;
       }
 
+      payload = /** @type {BridgeCommandResponse} */ (payload);
       const rid = payload?.rid;
       if (typeof rid === 'number' && this.pendingJson.has(rid)) {
         const pending = this.pendingJson.get(rid);
         this.pendingJson.delete(rid);
-        pending.resolve(payload);
+        if (pending) pending.resolve(payload);
       }
 
       if (Array.isArray(payload?.devices)) this.devices = payload.devices;
@@ -888,11 +1112,12 @@ class HotasConfigClient {
     log('Unhandled EVT frame', `type=${complete.type} len=${complete.bytes.length}`);
   }
 
+  /** @param {Uint8Array} bytes */
   handleStreamNotification(bytes) {
     if (bytes.byteLength < 16) return;
 
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const sample = {
+    const sample = /** @type {StreamSample} */ ({
       version: view.getUint8(0),
       flags: view.getUint8(1),
       deviceId: view.getUint32(2, true),
@@ -901,7 +1126,7 @@ class HotasConfigClient {
       normQ15: view.getInt16(14, true),
       norm: view.getInt16(14, true) / 32767,
       receivedAt: new Date(),
-    };
+    });
 
     const meta = this.getElementMeta(sample.deviceId, sample.elementId);
     if (meta) sample.meta = meta;
@@ -923,29 +1148,41 @@ class HotasConfigClient {
 }
 
 class MappingWizard {
+  /** @param {HotasConfigClient} client */
   constructor(client) {
+    /** @type {HotasConfigClient} */
     this.client = client;
+    /** @type {'idle'|'detecting'|'candidate'|'applied'|'no-match'} */
     this.state = 'idle';
+    /** @type {OutputKey} */
     this.targetKey = 'z';
+    /** @type {number} */
     this.startedAt = 0;
+    /** @type {number} */
     this.durationMs = 1600;
+    /** @type {number | null} */
     this.intervalId = null;
+    /** @type {number | null} */
     this.timeoutId = null;
+    /** @type {Map<string, WizardDetectorEntry>} */
     this.detector = new Map();
+    /** @type {WizardCandidate | null} */
     this.candidate = null;
   }
 
+  /** @param {'idle'|'detecting'|'candidate'|'applied'|'no-match'} [state='idle'] */
   reset(state = 'idle') {
     this.state = state;
     this.startedAt = 0;
     this.detector.clear();
     this.candidate = null;
-    clearInterval(this.intervalId);
-    clearTimeout(this.timeoutId);
+    clearInterval(timerValue(this.intervalId));
+    clearTimeout(timerValue(this.timeoutId));
     this.intervalId = null;
     this.timeoutId = null;
   }
 
+  /** @param {OutputKey} targetKey */
   async begin(targetKey) {
     this.reset('detecting');
     this.targetKey = targetKey;
@@ -963,6 +1200,7 @@ class MappingWizard {
     render();
   }
 
+  /** @param {StreamSample} sample */
   consumeSample(sample) {
     if (this.state !== 'detecting') return;
 
@@ -1016,6 +1254,7 @@ class MappingWizard {
     this.candidate = this.pickBestCandidate();
   }
 
+/** @returns {WizardCandidate | null} */
   pickBestCandidate() {
     const expectedKind = TARGET_KIND[this.targetKey] || 'axis';
     const candidates = [...this.detector.values()]
@@ -1036,8 +1275,8 @@ class MappingWizard {
 
   finish() {
     if (this.state !== 'detecting') return;
-    clearInterval(this.intervalId);
-    clearTimeout(this.timeoutId);
+    clearInterval(timerValue(this.intervalId));
+    clearTimeout(timerValue(this.timeoutId));
     this.intervalId = null;
     this.timeoutId = null;
     this.candidate = this.pickBestCandidate();
@@ -1045,6 +1284,7 @@ class MappingWizard {
     render();
   }
 
+  /** @returns {Promise<void>} */
   async confirm() {
     if (!this.candidate) throw new Error('No candidate mapping to confirm.');
     await this.client.applyAxisPatch(this.targetKey, this.candidate);
@@ -1062,17 +1302,24 @@ class MappingWizard {
   }
 }
 
+/** @returns {AxisConfig} */
 function selectedAxisConfig() {
   const config = ensureConfigShape(client.currentConfig || { version: 2, axes: {} });
   client.currentConfig = config;
   return normalizeAxisConfig(config.axes[tuningState.selectedAxisKey]);
 }
 
+/**
+ * @param {OutputKey} axisKey
+ * @param {AxisConfig} [mapping=selectedAxisConfig()]
+ * @returns {StreamSample | null}
+ */
 function getLatestMappedSample(axisKey, mapping = selectedAxisConfig()) {
   if (!mapping?.configured || !mapping.device_id || mapping.element_id == null) return null;
   return client.latestSampleByKey.get(`${mapping.device_id}:${mapping.element_id}`) || null;
 }
 
+/** @returns {void} */
 function refreshPreviewForSelectedAxis() {
   const axisKey = tuningState.selectedAxisKey;
   const mapping = selectedAxisConfig();
@@ -1091,19 +1338,21 @@ function refreshPreviewForSelectedAxis() {
   tuningState.previewMetaKey = metaKey;
 }
 
+/** @returns {void} */
 function scheduleSelectedAxisApply() {
-  clearTimeout(tuningState.applyTimer);
+  clearTimeout(timerValue(tuningState.applyTimer));
   tuningState.applyTimer = setTimeout(async () => {
     try {
       await client.applyAxisConfig(tuningState.selectedAxisKey, selectedAxisConfig());
       render();
     } catch (error) {
-      showError(`Failed to apply tuning change: ${error.message || error}`);
+      showError(`Failed to apply tuning change: ${errorMessage(error)}`);
       render();
     }
   }, 120);
 }
 
+/** @param {(next: AxisConfig) => void} mutator */
 function updateSelectedAxisConfig(mutator) {
   client.currentConfig = ensureConfigShape(client.currentConfig || { version: 2, axes: {} });
   const current = normalizeAxisConfig(client.currentConfig.axes[tuningState.selectedAxisKey]);
@@ -1118,6 +1367,11 @@ function updateSelectedAxisConfig(mutator) {
   render();
 }
 
+/**
+ * @param {OutputKey} axisKey
+ * @param {AxisConfig} mapping
+ * @returns {void}
+ */
 function drawCurveEditor(axisKey, mapping) {
   const svg = elements.curveSvg;
   const width = 360;
@@ -1125,14 +1379,16 @@ function drawCurveEditor(axisKey, mapping) {
   const pad = 28;
   const plotW = width - pad * 2;
   const plotH = height - pad * 2;
+  /** @param {number} n */
   const toX = (n) => pad + n * plotW;
+  /** @param {number} n */
   const toY = (n) => height - pad - n * plotH;
   const p1 = mapping.curve.p1;
   const p2 = mapping.curve.p2;
 
-  const markerInput = tuningState.preview ? clamp(tuningState.preview.markerInput, 0, 1) : null;
-  const markerOutput = tuningState.preview ? clamp(tuningState.preview.markerOutput, 0, 1) : null;
-  const marker = markerInput != null ? `
+  const markerInput = tuningState.preview && tuningState.preview.markerInput != null ? clamp(tuningState.preview.markerInput, 0, 1) : null;
+  const markerOutput = tuningState.preview && tuningState.preview.markerOutput != null ? clamp(tuningState.preview.markerOutput, 0, 1) : null;
+  const marker = markerInput != null && markerOutput != null ? `
     <circle cx="${toX(markerInput)}" cy="${toY(markerOutput)}" r="6" fill="#49d7c4" stroke="#0c101a" stroke-width="2"></circle>
     <line x1="${toX(markerInput)}" y1="${toY(0)}" x2="${toX(markerInput)}" y2="${toY(markerOutput)}" stroke="rgba(73,215,196,0.35)" stroke-dasharray="4 4"></line>
     <line x1="${toX(0)}" y1="${toY(markerOutput)}" x2="${toX(markerInput)}" y2="${toY(markerOutput)}" stroke="rgba(73,215,196,0.35)" stroke-dasharray="4 4"></line>
@@ -1161,6 +1417,7 @@ function drawCurveEditor(axisKey, mapping) {
   elements.curveStatus.textContent = `${targetByKey(axisKey).label} · p1 ${round3(p1.x)},${round3(p1.y)} · p2 ${round3(p2.x)},${round3(p2.y)}`;
 }
 
+/** @param {PointerEvent} event */
 function handleCurvePointer(event) {
   if (!tuningState.curveDragPoint) return;
   const rect = elements.curveSvg.getBoundingClientRect();
@@ -1190,7 +1447,9 @@ function handleCurvePointer(event) {
   });
 }
 
+/** @returns {void} */
 function bindModifierControls() {
+  /** @type {Array<[HTMLInputElement, HTMLInputElement, 'deadzoneInner' | 'outerClamp' | 'smoothing']>} */
   const pairs = [
     [elements.deadzoneInnerRange, elements.deadzoneInnerInput, 'deadzoneInner'],
     [elements.outerClampRange, elements.outerClampInput, 'outerClamp'],
@@ -1198,6 +1457,7 @@ function bindModifierControls() {
   ];
 
   for (const [rangeEl, inputEl, kind] of pairs) {
+    /** @param {string | number} value */
     const handler = (value) => {
       const numeric = Number(value);
       if (!Number.isFinite(numeric)) return;
@@ -1211,20 +1471,23 @@ function bindModifierControls() {
     };
 
     rangeEl.addEventListener('input', (event) => {
-      inputEl.value = event.target.value;
-      handler(event.target.value);
+      const target = /** @type {HTMLInputElement} */ (event.target);
+      inputEl.value = target.value;
+      handler(target.value);
     });
 
     inputEl.addEventListener('input', (event) => {
-      rangeEl.value = event.target.value;
-      handler(event.target.value);
+      const target = /** @type {HTMLInputElement} */ (event.target);
+      rangeEl.value = target.value;
+      handler(target.value);
     });
   }
 
   elements.curveSvg.addEventListener('pointerdown', (event) => {
-    const point = event.target?.dataset?.point;
+    const target = event.target instanceof SVGElement ? event.target : null;
+    const point = target?.dataset?.point;
     if (!point) return;
-    tuningState.curveDragPoint = point;
+    tuningState.curveDragPoint = point === 'p1' || point === 'p2' ? point : null;
     handleCurvePointer(event);
   });
 
@@ -1237,14 +1500,19 @@ function bindModifierControls() {
 const client = new HotasConfigClient();
 const wizard = new MappingWizard(client);
 
+/** @returns {DeviceSummary | null} */
 function selectedDevice() {
   return client.devices.find((device) => device.device_id === client.selectedDeviceId) || null;
 }
 
+/** @param {OutputKey} key
+ * @returns {OutputTarget}
+ */
 function targetByKey(key) {
   return OUTPUT_TARGETS.find((target) => target.key === key) || OUTPUT_TARGETS[0];
 }
 
+/** @returns {void} */
 function renderConnectionState() {
   const connected = Boolean(client.device?.gatt?.connected && client.service);
   elements.connBadge.textContent = connected ? 'Connected' : 'Disconnected';
@@ -1271,6 +1539,7 @@ function renderConnectionState() {
   elements.wizardRetryBtn.disabled = !connected || wizard.state === 'detecting';
 }
 
+/** @returns {void} */
 function renderDevices() {
   elements.deviceCount.textContent = `${client.devices.length} device${client.devices.length === 1 ? '' : 's'}`;
 
@@ -1302,6 +1571,7 @@ function renderDevices() {
   }
 }
 
+/** @returns {void} */
 function renderDescriptor() {
   const device = selectedDevice();
   const bytes = device ? client.descriptorCache.get(device.device_id) : null;
@@ -1336,6 +1606,7 @@ function renderDescriptor() {
   elements.descriptorHex.textContent = formatHexBlock(bytes);
 }
 
+/** @returns {void} */
 function renderTelemetry() {
   const history = client.sampleHistory;
   const latest = client.latestSample;
@@ -1392,8 +1663,9 @@ function renderTelemetry() {
   }
 }
 
+/** @returns {void} */
 function renderWizard() {
-  const target = targetByKey(elements.targetSelect.value);
+  const target = targetByKey(/** @type {OutputKey} */ (elements.targetSelect.value));
   const progress = wizard.progress;
   elements.wizardProgressFill.style.width = `${Math.round(progress * 100)}%`;
   elements.wizardPrompt.textContent = target.prompt;
@@ -1428,6 +1700,7 @@ function renderWizard() {
   `;
 }
 
+/** @returns {void} */
 function renderMappings() {
   const config = ensureConfigShape(client.currentConfig || { version: 2, axes: {} });
   const axes = config.axes || {};
@@ -1454,7 +1727,7 @@ function renderMappings() {
     `;
 
     row.addEventListener('click', () => {
-      tuningState.selectedAxisKey = target.key;
+      tuningState.selectedAxisKey = /** @type {OutputKey} */ (target.key);
       elements.tuneAxisSelect.value = target.key;
       tuningState.preview = null;
       tuningState.previewMetaKey = '';
@@ -1466,6 +1739,7 @@ function renderMappings() {
   }
 }
 
+/** @returns {void} */
 function renderTuningPanel() {
   const mapping = selectedAxisConfig();
   const axisKey = tuningState.selectedAxisKey;
@@ -1487,11 +1761,11 @@ function renderTuningPanel() {
     el.disabled = disabled;
   }
 
-  elements.deadzoneInnerRange.value = mapping.deadzone.inner;
+  elements.deadzoneInnerRange.value = inputNumber(mapping.deadzone.inner);
   elements.deadzoneInnerInput.value = mapping.deadzone.inner.toFixed(3);
-  elements.outerClampRange.value = mapping.deadzone.outer;
+  elements.outerClampRange.value = inputNumber(mapping.deadzone.outer);
   elements.outerClampInput.value = mapping.deadzone.outer.toFixed(3);
-  elements.smoothingRange.value = mapping.smoothing_alpha;
+  elements.smoothingRange.value = inputNumber(mapping.smoothing_alpha);
   elements.smoothingInput.value = mapping.smoothing_alpha.toFixed(2);
 
   refreshPreviewForSelectedAxis();
@@ -1530,6 +1804,7 @@ function renderTuningPanel() {
   elements.previewSmoothed.textContent = preview.smoothed.toFixed(3);
 }
 
+/** @returns {void} */
 function render() {
   renderConnectionState();
   renderDevices();
@@ -1540,13 +1815,17 @@ function render() {
   renderTuningPanel();
 }
 
+/**
+ * @param {() => Promise<void>} action
+ * @param {string} fallbackMessage
+ */
 async function guarded(action, fallbackMessage) {
   clearError();
   try {
     await action();
     render();
   } catch (error) {
-    showError(`${fallbackMessage}: ${error.message || error}`);
+    showError(`${fallbackMessage}: ${errorMessage(error)}`);
     render();
   }
 }
@@ -1626,7 +1905,7 @@ elements.downloadDescriptorBtn.addEventListener('click', () => {
 elements.targetSelect.addEventListener('change', () => render());
 
 elements.tuneAxisSelect.addEventListener('change', () => {
-  tuningState.selectedAxisKey = elements.tuneAxisSelect.value;
+  tuningState.selectedAxisKey = isOutputKey(elements.tuneAxisSelect.value) ? elements.tuneAxisSelect.value : 'z';
   tuningState.preview = null;
   tuningState.previewMetaKey = '';
   refreshPreviewForSelectedAxis();
@@ -1644,16 +1923,19 @@ elements.resetModifiersBtn.addEventListener('click', () => {
 bindModifierControls();
 
 elements.wizardStartBtn.addEventListener('click', () => guarded(async () => {
-  await wizard.begin(elements.targetSelect.value);
+  await wizard.begin(isOutputKey(elements.targetSelect.value) ? elements.targetSelect.value : 'z');
 }, 'Failed to start mapping wizard'));
 
 elements.wizardRetryBtn.addEventListener('click', () => guarded(async () => {
-  await wizard.begin(elements.targetSelect.value);
+  await wizard.begin(isOutputKey(elements.targetSelect.value) ? elements.targetSelect.value : 'z');
 }, 'Failed to retry detection'));
 
 elements.wizardConfirmBtn.addEventListener('click', () => guarded(async () => {
   await wizard.confirm();
-  log('Mapping applied', `${targetByKey(wizard.targetKey).label} -> device ${wizard.candidate.deviceId} element ${wizard.candidate.elementId}`);
+  const candidate = wizard.candidate;
+  if (candidate) {
+    log('Mapping applied', `${targetByKey(wizard.targetKey).label} -> device ${candidate.deviceId} element ${candidate.elementId}`);
+  }
 }, 'Failed to apply mapping'));
 
 elements.clearLogBtn.addEventListener('click', () => {

@@ -1,52 +1,28 @@
-const HOTAS_FIRMWARE_FEEDS = {
-  stable: './firmware/stable/latest.json',
-  beta: './firmware/beta/latest.json',
-};
+/** @import { FirmwareArtifactMeta, FirmwareFeedMeta, FirmwareFeatureSupport } from './shared/types.js' */
 
-const HOTAS_FLASHER_SCRIPT = 'https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module';
+import { byId, errorMessage, requireElement, setHref, setStatusPill, setText } from './shared/dom.js';
+import {
+  HOTAS_FIRMWARE_FEEDS,
+  HOTAS_FLASHER_SCRIPT,
+  absoluteUrl,
+  firmwareFeatureSupport,
+  formatDate,
+  loadFirmwareFeed,
+  shortenHash,
+  validateManifestUrl,
+} from './shared/firmware-release.js';
 
-function firmwareFeatureSupport() {
-  return {
-    bluetooth: 'bluetooth' in navigator,
-    serial: 'serial' in navigator,
-    usb: 'usb' in navigator,
-    secure: window.isSecureContext,
-  };
-}
+/** @type {Promise<void> | null} */
+let espWebToolsLoadPromise = null;
 
-function shortenHash(value, keep = 10) {
-  if (!value || typeof value !== 'string') return '—';
-  return value.length > keep ? `${value.slice(0, keep)}…` : value;
-}
-
-function formatDate(value) {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
-}
-
-function absoluteUrl(value, base = window.location.href) {
-  try {
-    return new URL(value, base).toString();
-  } catch {
-    return value;
-  }
-}
-
-async function fetchJson(url) {
-  const response = await fetch(url, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`Request failed (${response.status}) for ${url}`);
-  }
-  return response.json();
-}
-
+/**
+ * @returns {Promise<void>}
+ */
 async function ensureEspWebToolsLoaded() {
   if (window.customElements?.get('esp-web-install-button')) return;
-  if (window.__hotasEspWebToolsPromise) return window.__hotasEspWebToolsPromise;
+  if (espWebToolsLoadPromise) return espWebToolsLoadPromise;
 
-  window.__hotasEspWebToolsPromise = new Promise((resolve, reject) => {
+  espWebToolsLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.type = 'module';
     script.src = HOTAS_FLASHER_SCRIPT;
@@ -55,87 +31,71 @@ async function ensureEspWebToolsLoaded() {
     document.head.appendChild(script);
   });
 
-  return window.__hotasEspWebToolsPromise;
+  return espWebToolsLoadPromise;
 }
 
+/**
+ * @param {Element | null} target
+ * @param {string} manifestUrl
+ */
 function renderInstallButton(target, manifestUrl) {
-  if (!target) return;
-  target.innerHTML = '';
+  if (!(target instanceof HTMLElement)) return;
+  target.replaceChildren();
+
   const install = document.createElement('esp-web-install-button');
   install.setAttribute('manifest', manifestUrl);
   install.className = 'firmware-install-button';
   target.appendChild(install);
 }
 
-async function validateManifestUrl(manifestUrl) {
-  const manifest = await fetchJson(manifestUrl);
-  if (!manifest || typeof manifest !== 'object') {
-    throw new Error('Manifest response was not valid JSON.');
-  }
-  if (!Array.isArray(manifest.builds) || !manifest.builds.length) {
-    throw new Error('Manifest did not contain any builds.');
-  }
-  const firstBuild = manifest.builds[0];
-  if (!Array.isArray(firstBuild.parts) || !firstBuild.parts.length) {
-    throw new Error('Manifest did not contain any flash parts.');
-  }
-  return manifest;
-}
-
-function setText(id, value) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = value;
-}
-
-function setHref(id, value, labelFallback = 'Open') {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (value) {
-    el.href = value;
-    el.classList.remove('hidden');
-    if (!el.textContent.trim()) el.textContent = labelFallback;
-  } else {
-    el.classList.add('hidden');
-  }
-}
-
-function setStatusPill(id, text, tone = 'muted') {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.textContent = text;
-  el.className = `pill ${tone}`;
-}
-
+/**
+ * @param {Element | null} container
+ * @param {FirmwareFeedMeta | null} meta
+ * @param {string | null | undefined} assetBaseUrl
+ */
 function buildDownloadsList(container, meta, assetBaseUrl) {
-  if (!container) return;
-  const artifacts = meta?.artifacts || {};
+  if (!(container instanceof HTMLElement)) return;
+
+  const artifacts = meta?.artifacts ?? {};
   const entries = Object.entries(artifacts);
-  if (!entries.length) {
+  if (entries.length === 0) {
     container.innerHTML = '<div class="empty-state">No published binary artifacts were listed in the manifest.</div>';
     return;
   }
 
-  container.innerHTML = '';
-  for (const [key, artifact] of entries) {
+  container.replaceChildren();
+  for (const [key, artifactValue] of entries) {
+    const artifact = /** @type {FirmwareArtifactMeta} */ (artifactValue);
     const row = document.createElement('div');
     row.className = 'download-row';
+
     const left = document.createElement('div');
     left.className = 'download-row-copy';
-    left.innerHTML = `
-      <strong>${artifact.label || key}</strong>
-      <span>Offset ${artifact.offset ?? '—'} · SHA ${shortenHash(artifact.sha256, 12)}</span>
-    `;
+
+    const title = document.createElement('strong');
+    title.textContent = artifact.label || key;
+
+    const metaLine = document.createElement('span');
+    const offsetText = artifact.offset ?? '—';
+    metaLine.textContent = `Offset ${offsetText} · SHA ${shortenHash(artifact.sha256, 12)}`;
+    left.append(title, metaLine);
+
     const link = document.createElement('a');
     link.className = 'btn';
     link.target = '_blank';
     link.rel = 'noreferrer';
     link.href = absoluteUrl(artifact.path, assetBaseUrl || window.location.href);
     link.textContent = 'Download';
+
     row.append(left, link);
     container.appendChild(row);
   }
 }
 
+/**
+ * @param {FirmwareFeatureSupport} support
+ * @returns {{ text: string, tone: 'success' | 'warn' }}
+ */
 function buildCompatCopy(support) {
   if (!support.secure) {
     return {
@@ -143,38 +103,34 @@ function buildCompatCopy(support) {
       tone: 'warn',
     };
   }
+
   if (support.serial) {
     return {
       text: 'Direct USB flashing is available in this browser. Use a data-capable USB cable and close other serial tools first.',
       tone: 'success',
     };
   }
+
   return {
     text: 'This browser does not expose the required serial device APIs here. Desktop Chrome or Edge is the recommended path for one-click flashing.',
     tone: 'warn',
   };
 }
 
-function normalizeManifestMeta(meta, metaUrl) {
-  if (!meta || typeof meta !== 'object') return null;
-  return {
-    ...meta,
-    feedUrl: metaUrl,
-    manifestUrl: meta.manifestUrl ? absoluteUrl(meta.manifestUrl, metaUrl) : meta.manifestPath ? absoluteUrl(meta.manifestPath, metaUrl) : null,
-  };
-}
-
-async function loadFirmwareFeed(url) {
-  const feedUrl = absoluteUrl(url, window.location.href);
-  const raw = await fetchJson(feedUrl);
-  return normalizeManifestMeta(raw, feedUrl);
-}
-
+/**
+ * @param {FirmwareFeedMeta | null} meta
+ * @param {string} sourceUrl
+ * @returns {Promise<void>}
+ */
 async function hydrateFirmwareUi(meta, sourceUrl) {
   const support = firmwareFeatureSupport();
   const compat = buildCompatCopy(support);
 
-  setStatusPill('firmwareCompatPill', support.serial ? 'USB flashing ready' : 'Desktop Chromium recommended', support.serial ? 'success' : 'warn');
+  setStatusPill(
+    'firmwareCompatPill',
+    support.serial ? 'USB flashing ready' : 'Desktop Chromium recommended',
+    compat.tone,
+  );
   setText('firmwareCompatText', compat.text);
   setText('firmwareVersion', meta?.version || 'No published firmware');
   setText('firmwareChannel', meta?.channel || '—');
@@ -188,27 +144,27 @@ async function hydrateFirmwareUi(meta, sourceUrl) {
   setText('firmwareReleaseNotes', meta?.releaseNotes || 'No release notes were published with this manifest.');
   setHref('firmwareReleaseLink', meta?.releaseUrl, 'Open release notes');
 
-  const quickStatus = document.getElementById('firmwareQuickStatus');
+  const quickStatus = byId('firmwareQuickStatus');
   if (quickStatus) {
-    quickStatus.textContent = meta?.manifestUrl ? `Ready to flash ${meta.version}` : 'No published manifest yet';
+    quickStatus.textContent = meta?.manifestUrl ? `Ready to flash ${meta?.version || 'published build'}` : 'No published manifest yet';
   }
 
-  const quickVersion = document.getElementById('firmwareQuickVersion');
+  const quickVersion = byId('firmwareQuickVersion');
   if (quickVersion) {
     quickVersion.textContent = meta?.version || 'Unavailable';
   }
 
-  const quickNotes = document.getElementById('firmwareQuickNotes');
+  const quickNotes = byId('firmwareQuickNotes');
   if (quickNotes) {
     quickNotes.textContent = meta?.releaseNotes || 'Publish a release manifest to enable one-click flashing from the config console.';
   }
 
-  const downloads = document.getElementById('firmwareDownloads');
-  buildDownloadsList(downloads, meta, meta?.manifestUrl || sourceUrl);
+  buildDownloadsList(byId('firmwareDownloads'), meta, meta?.manifestUrl || sourceUrl);
 
-  const installHost = document.getElementById('firmwareInstallHost');
-  const manualManifestInput = document.getElementById('customManifestInput');
-  const shouldRenderInstaller = Boolean(document.getElementById('flashPage'));
+  const installHost = byId('firmwareInstallHost');
+  const manualManifestInput = byId('customManifestInput');
+  const shouldRenderInstaller = Boolean(byId('flashPage'));
+
   if (meta?.manifestUrl && support.secure) {
     try {
       await validateManifestUrl(meta.manifestUrl);
@@ -218,83 +174,110 @@ async function hydrateFirmwareUi(meta, sourceUrl) {
       } else if (installHost) {
         installHost.innerHTML = '<div class="empty-state">Open the full firmware flasher page to launch the browser installer.</div>';
       }
+
       setStatusPill('firmwareManifestPill', 'Manifest ready', 'success');
-      if (manualManifestInput && !manualManifestInput.value) manualManifestInput.value = meta.manifestUrl;
+      if (manualManifestInput instanceof HTMLInputElement && !manualManifestInput.value) {
+        manualManifestInput.value = meta.manifestUrl;
+      }
+      return;
     } catch (error) {
       if (installHost) {
-        installHost.innerHTML = `<div class="banner">${error.message}</div>`;
+        installHost.innerHTML = `<div class="banner">${errorMessage(error)}</div>`;
       }
       setStatusPill('firmwareManifestPill', 'Installer unavailable', 'warn');
+      return;
     }
-  } else {
-    if (installHost) {
-      installHost.innerHTML = '<div class="empty-state">No published manifest is available yet. Publish a firmware release or load a custom manifest URL below.</div>';
-    }
-    setStatusPill('firmwareManifestPill', 'Awaiting release', 'warn');
   }
+
+  if (installHost) {
+    installHost.innerHTML = '<div class="empty-state">No published manifest is available yet. Publish a firmware release or load a custom manifest URL below.</div>';
+  }
+  setStatusPill('firmwareManifestPill', 'Awaiting release', 'warn');
 }
 
+/**
+ * @param {string} url
+ * @returns {Promise<FirmwareFeedMeta | null>}
+ */
 async function loadFeedIntoUi(url) {
   setStatusPill('firmwareFeedPill', 'Loading feed', 'muted');
   try {
     const meta = await loadFirmwareFeed(url);
     await hydrateFirmwareUi(meta, url);
-    setStatusPill('firmwareFeedPill', `Loaded ${meta.channel || 'feed'}`, 'success');
+    setStatusPill('firmwareFeedPill', `Loaded ${meta?.channel || 'feed'}`, 'success');
     return meta;
   } catch (error) {
     setStatusPill('firmwareFeedPill', 'Feed unavailable', 'warn');
-    const installHost = document.getElementById('firmwareInstallHost');
+    const installHost = byId('firmwareInstallHost');
     if (installHost) {
-      installHost.innerHTML = `<div class="empty-state">${error.message}</div>`;
+      installHost.innerHTML = `<div class="empty-state">${errorMessage(error)}</div>`;
     }
     setText('firmwareReleaseNotes', 'No published release feed could be loaded. You can still paste a custom manifest URL below for testing.');
     throw error;
   }
 }
 
+/**
+ * @param {string} manifestUrl
+ * @returns {Promise<void>}
+ */
 async function loadCustomManifest(manifestUrl) {
-  if (!manifestUrl) throw new Error('Enter a manifest URL first.');
+  if (!manifestUrl) {
+    throw new Error('Enter a manifest URL first.');
+  }
+
   setStatusPill('firmwareManifestPill', 'Loading manifest', 'muted');
   const absoluteManifestUrl = absoluteUrl(manifestUrl, window.location.href);
   await validateManifestUrl(absoluteManifestUrl);
   await ensureEspWebToolsLoaded();
-  renderInstallButton(document.getElementById('firmwareInstallHost'), absoluteManifestUrl);
+  renderInstallButton(byId('firmwareInstallHost'), absoluteManifestUrl);
   setStatusPill('firmwareManifestPill', 'Custom manifest ready', 'success');
   setText('firmwareReleaseNotes', 'Custom manifest loaded for manual validation. Use published feeds for normal users.');
 }
 
 function attachFirmwarePageEvents() {
-  const channelSelect = document.getElementById('firmwareChannelSelect');
-  const refreshBtn = document.getElementById('refreshFirmwareFeedBtn');
-  const loadCustomBtn = document.getElementById('loadCustomManifestBtn');
-  const customManifestInput = document.getElementById('customManifestInput');
+  const channelSelect = byId('firmwareChannelSelect');
+  const refreshBtn = byId('refreshFirmwareFeedBtn');
+  const loadCustomBtn = byId('loadCustomManifestBtn');
+  const customManifestInput = byId('customManifestInput');
 
-  if (channelSelect) {
+  if (channelSelect instanceof HTMLSelectElement) {
     channelSelect.addEventListener('change', async () => {
-      const url = HOTAS_FIRMWARE_FEEDS[channelSelect.value] || channelSelect.value;
+      const selectedValue = channelSelect.value;
+      const url = selectedValue in HOTAS_FIRMWARE_FEEDS
+        ? HOTAS_FIRMWARE_FEEDS[/** @type {'stable' | 'beta'} */ (selectedValue)]
+        : selectedValue;
       try {
         await loadFeedIntoUi(url);
-      } catch {}
+      } catch {
+        // Status UI was already updated by loadFeedIntoUi.
+      }
     });
   }
 
-  if (refreshBtn) {
+  if (refreshBtn instanceof HTMLButtonElement) {
     refreshBtn.addEventListener('click', async () => {
-      const selected = channelSelect?.value || 'stable';
-      const url = HOTAS_FIRMWARE_FEEDS[selected] || selected;
+      const selected = channelSelect instanceof HTMLSelectElement ? channelSelect.value : 'stable';
+      const url = selected in HOTAS_FIRMWARE_FEEDS
+        ? HOTAS_FIRMWARE_FEEDS[/** @type {'stable' | 'beta'} */ (selected)]
+        : selected;
       try {
         await loadFeedIntoUi(url);
-      } catch {}
+      } catch {
+        // Status UI was already updated by loadFeedIntoUi.
+      }
     });
   }
 
-  if (loadCustomBtn && customManifestInput) {
+  if (loadCustomBtn instanceof HTMLButtonElement && customManifestInput instanceof HTMLInputElement) {
     loadCustomBtn.addEventListener('click', async () => {
       try {
         await loadCustomManifest(customManifestInput.value.trim());
       } catch (error) {
-        const installHost = document.getElementById('firmwareInstallHost');
-        if (installHost) installHost.innerHTML = `<div class="banner">${error.message}</div>`;
+        const installHost = byId('firmwareInstallHost');
+        if (installHost) {
+          installHost.innerHTML = `<div class="banner">${errorMessage(error)}</div>`;
+        }
         setStatusPill('firmwareManifestPill', 'Custom manifest failed', 'warn');
       }
     });
@@ -302,8 +285,8 @@ function attachFirmwarePageEvents() {
 }
 
 async function initializeFirmwareInstaller() {
-  const quickCard = document.getElementById('firmwareQuickCard');
-  const flashPage = document.getElementById('flashPage');
+  const quickCard = byId('firmwareQuickCard');
+  const flashPage = byId('flashPage');
   if (!quickCard && !flashPage) return;
 
   attachFirmwarePageEvents();
@@ -315,4 +298,4 @@ async function initializeFirmwareInstaller() {
   }
 }
 
-initializeFirmwareInstaller();
+void initializeFirmwareInstaller();

@@ -1,0 +1,16 @@
+{
+  "name": "gamepad-gateway-usb2ble",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck:web": "tsc -p tsconfig.web.json --pretty false",
+    "lint:web": "eslint webapp/**/*.js",
+    "check:web": "npm run typecheck:web && npm run lint:web"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "eslint": "^9.22.0",
+    "globals": "^15.15.0",
+    "typescript": "^5.8.2"
+  }
+}
