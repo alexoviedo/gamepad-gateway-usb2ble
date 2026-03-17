@@ -52,7 +52,7 @@ const tuningState = {
   previewMetaKey: '',
 };
 
-const elements = {
+const elements = (typeof document !== 'undefined') ? {
   connectBtn: document.getElementById('connectBtn'),
   reconnectBtn: document.getElementById('reconnectBtn'),
   disconnectBtn: document.getElementById('disconnectBtn'),
@@ -106,9 +106,10 @@ const elements = {
   previewDeadzoned: document.getElementById('previewDeadzoned'),
   previewCurved: document.getElementById('previewCurved'),
   previewSmoothed: document.getElementById('previewSmoothed'),
-};
+} : {};
 
-elements.serviceUuidText.textContent = UUIDS.service;
+if (typeof document !== 'undefined') {
+  elements.serviceUuidText.textContent = UUIDS.service;
 
 for (const target of OUTPUT_TARGETS) {
   const option = document.createElement('option');
@@ -119,22 +120,27 @@ for (const target of OUTPUT_TARGETS) {
   elements.tuneAxisSelect.appendChild(tuneOption);
 }
 
-elements.targetSelect.value = 'z';
-elements.tuneAxisSelect.value = 'z';
+  elements.targetSelect.value = 'z';
+  elements.tuneAxisSelect.value = 'z';
+}
 
 function nowLabel() {
   return new Date().toLocaleTimeString();
 }
 
-function log(message, detail = '') {
+export function log(message, detail = '') {
   const line = `[${nowLabel()}] ${message}${detail ? ` ${detail}` : ''}`;
-  elements.logPanel.textContent += `${line}\n`;
-  elements.logPanel.scrollTop = elements.logPanel.scrollHeight;
+  if (typeof document !== 'undefined' && elements.logPanel) {
+    elements.logPanel.textContent += `${line}\n`;
+    elements.logPanel.scrollTop = elements.logPanel.scrollHeight;
+  }
 }
 
-function showError(message) {
-  elements.errorBanner.textContent = message;
-  elements.errorBanner.classList.remove('hidden');
+export function showError(message) {
+  if (typeof document !== 'undefined' && elements.errorBanner) {
+    elements.errorBanner.textContent = message;
+    elements.errorBanner.classList.remove('hidden');
+  }
   log('ERROR', message);
 }
 
@@ -395,7 +401,7 @@ class ChunkAssembler {
   }
 }
 
-class HotasConfigClient {
+export class HotasConfigClient {
   constructor() {
     this.device = null;
     this.server = null;
@@ -758,7 +764,11 @@ class HotasConfigClient {
     if (response.config && typeof response.config === 'object') {
       this.currentConfig = ensureConfigShape(response.config);
     } else if (response.config_json) {
-      this.currentConfig = ensureConfigShape(JSON.parse(response.config_json));
+      try {
+        this.currentConfig = ensureConfigShape(JSON.parse(response.config_json));
+      } catch (error) {
+        showError(`Failed to parse config JSON: ${error.message}`);
+      }
     }
 
     if (markSaved && this.currentConfig) {
@@ -1530,7 +1540,8 @@ function renderTuningPanel() {
   elements.previewSmoothed.textContent = preview.smoothed.toFixed(3);
 }
 
-function render() {
+export function render() {
+  if (typeof document === 'undefined') return;
   renderConnectionState();
   renderDevices();
   renderDescriptor();
@@ -1551,6 +1562,7 @@ async function guarded(action, fallbackMessage) {
   }
 }
 
+if (typeof document !== 'undefined') {
 elements.connectBtn.addEventListener('click', () => guarded(async () => {
   await client.connect();
   await client.getDevices();
@@ -1661,3 +1673,4 @@ elements.clearLogBtn.addEventListener('click', () => {
 });
 
 render();
+}
