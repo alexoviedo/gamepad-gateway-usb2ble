@@ -9,6 +9,16 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function escapeHTML(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 function firmwareFeatureSupport() {
   return {
     bluetooth: 'bluetooth' in navigator,
@@ -126,8 +136,8 @@ function buildDownloadsList(container, meta, assetBaseUrl) {
     const left = document.createElement('div');
     left.className = 'download-row-copy';
     left.innerHTML = `
-      <strong>${artifact.label || key}</strong>
-      <span>Offset ${artifact.offset ?? '—'} · SHA ${shortenHash(artifact.sha256, 12)}</span>
+      <strong>${escapeHTML(artifact.label || key)}</strong>
+      <span>Offset ${escapeHTML(artifact.offset ?? '—')} · SHA ${escapeHTML(shortenHash(artifact.sha256, 12))}</span>
     `;
     const link = document.createElement('a');
     link.className = 'btn';
@@ -226,7 +236,7 @@ async function hydrateFirmwareUi(meta, sourceUrl) {
       if (manualManifestInput && !manualManifestInput.value) manualManifestInput.value = meta.manifestUrl;
     } catch (error) {
       if (installHost) {
-        installHost.innerHTML = `<div class="banner">${errorMessage(error)}</div>`;
+        installHost.innerHTML = `<div class="banner">${escapeHTML(errorMessage(error))}</div>`;
       }
       setStatusPill('firmwareManifestPill', 'Installer unavailable', 'warn');
     }
@@ -249,7 +259,7 @@ async function loadFeedIntoUi(url) {
     setStatusPill('firmwareFeedPill', 'Feed unavailable', 'warn');
     const installHost = document.getElementById('firmwareInstallHost');
     if (installHost) {
-      installHost.innerHTML = `<div class="empty-state">${errorMessage(error)}</div>`;
+      installHost.innerHTML = `<div class="empty-state">${escapeHTML(errorMessage(error))}</div>`;
     }
     setText('firmwareReleaseNotes', 'No published release feed could be loaded. You can still paste a custom manifest URL below for testing.');
     throw error;
@@ -302,7 +312,7 @@ function attachFirmwarePageEvents() {
         await loadCustomManifest(customManifestInput.value.trim());
       } catch (error) {
         const installHost = document.getElementById('firmwareInstallHost');
-        if (installHost) installHost.innerHTML = `<div class="banner">${errorMessage(error)}</div>`;
+        if (installHost) installHost.innerHTML = `<div class="banner">${escapeHTML(errorMessage(error))}</div>`;
         setStatusPill('firmwareManifestPill', 'Custom manifest failed', 'warn');
       }
     });
