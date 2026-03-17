@@ -15,11 +15,11 @@ static uint32_t fnv1a32(const void *data, size_t len) {
 
 const char *ie_kind_str(InputElementKind k) {
   switch (k) {
-  case IE_KIND_AXIS:
+  case InputElementKind::AXIS:
     return "axis";
-  case IE_KIND_BUTTON:
+  case InputElementKind::BUTTON:
     return "button";
-  case IE_KIND_HAT:
+  case InputElementKind::HAT:
     return "hat";
   default:
     return "other";
@@ -28,18 +28,18 @@ const char *ie_kind_str(InputElementKind k) {
 
 InputElementKind ie_guess_kind(uint16_t usage_page, uint16_t usage) {
   // Buttons usage page
-  if (usage_page == 0x09) return IE_KIND_BUTTON;
+  if (usage_page == 0x09) return InputElementKind::BUTTON;
 
   // Generic Desktop hat
-  if (usage_page == 0x01 && usage == 0x39) return IE_KIND_HAT;
+  if (usage_page == 0x01 && usage == 0x39) return InputElementKind::HAT;
 
   // Generic Desktop axes 0x30..0x38
-  if (usage_page == 0x01 && usage >= 0x30 && usage <= 0x38) return IE_KIND_AXIS;
+  if (usage_page == 0x01 && usage >= 0x30 && usage <= 0x38) return InputElementKind::AXIS;
 
   // Simulation controls (rudder/throttle/etc)
-  if (usage_page == 0x02) return IE_KIND_AXIS;
+  if (usage_page == 0x02) return InputElementKind::AXIS;
 
-  return IE_KIND_OTHER;
+  return InputElementKind::OTHER;
 }
 
 const char *ie_friendly_usage(uint16_t usage_page, uint16_t usage) {
@@ -155,6 +155,7 @@ static void normalize_element(InputElement *e) {
   if (rv > maxv) rv = maxv;
 
   float denom = (float)(maxv - minv);
+  if (denom == 0.0f) return;
   e->norm_0_1 = (float)(rv - minv) / denom;
   if (e->norm_0_1 < 0.0f) e->norm_0_1 = 0.0f;
   if (e->norm_0_1 > 1.0f) e->norm_0_1 = 1.0f;

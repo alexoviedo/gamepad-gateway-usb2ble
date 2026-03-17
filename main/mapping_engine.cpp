@@ -131,7 +131,7 @@ static const InputElement *find_element_by_usage(const HidDeviceContext &dev,
 static const InputElement *find_first_axis_like(const HidDeviceContext &dev) {
   for (size_t i = 0; i < dev.caps.num_elements; i++) {
     const auto &e = dev.caps.elements[i];
-    if (e.kind == IE_KIND_AXIS) return &e;
+    if (e.kind == InputElementKind::AXIS) return &e;
   }
   return nullptr;
 }
@@ -144,7 +144,7 @@ static int find_sim_brake_axes(const HidDeviceContext &dev,
 
   for (size_t i = 0; i < dev.caps.num_elements; i++) {
     const auto &e = dev.caps.elements[i];
-    if (e.kind != IE_KIND_AXIS) continue;
+    if (e.kind != InputElementKind::AXIS) continue;
     if (e.usage_page == 0x0002 && e.usage == 0x00BF) {
       if (!a) a = &e;
       else if (!b && &e != a) { b = &e; break; }
@@ -160,7 +160,7 @@ static int count_toe_brake_elements(const HidDeviceContext &dev) {
   int count = 0;
   for (size_t i = 0; i < dev.caps.num_elements; i++) {
     const auto &e = dev.caps.elements[i];
-    if (e.kind != IE_KIND_AXIS) continue;
+    if (e.kind != InputElementKind::AXIS) continue;
     if (e.usage_page == 0x0002 && e.usage == 0x00BF) count++;
   }
   return count;
@@ -171,7 +171,7 @@ static float get_virtual_toe_brake_max_norm(const HidDeviceContext &dev) {
   bool any = false;
   for (size_t i = 0; i < dev.caps.num_elements; i++) {
     const auto &e = dev.caps.elements[i];
-    if (e.kind != IE_KIND_AXIS) continue;
+    if (e.kind != InputElementKind::AXIS) continue;
     if (e.usage_page == 0x0002 && e.usage == 0x00BF) {
       float v01 = (e.logical_min < 0) ? (e.norm_m1_1 + 1.0f) * 0.5f : e.norm_0_1;
       if (v01 > best) best = v01;
@@ -214,7 +214,7 @@ static void build_default_profile(const HidDeviceContext *devices, size_t num_de
 
   bool embedded_pedals = false;
   if (!ped && thr) {
-    const InputElement *z = find_element_by_usage(*thr, IE_KIND_AXIS, 0x0001, 0x0032); // GenericDesktop Z
+    const InputElement *z = find_element_by_usage(*thr, InputElementKind::AXIS, 0x0001, 0x0032); // GenericDesktop Z
     if (z && z->bit_size >= 16 && z->logical_max >= 32767) {
       ped = thr;
       embedded_pedals = true;
@@ -236,34 +236,34 @@ static void build_default_profile(const HidDeviceContext *devices, size_t num_de
 
   // Stick axes + hat
   if (stick) {
-    set_axis_mapping(out, OutputAxis::X,  src_from_element(*stick, find_element_by_usage(*stick, IE_KIND_AXIS, 0x0001, 0x0030)));
-    set_axis_mapping(out, OutputAxis::Y,  src_from_element(*stick, find_element_by_usage(*stick, IE_KIND_AXIS, 0x0001, 0x0031)));
+    set_axis_mapping(out, OutputAxis::X,  src_from_element(*stick, find_element_by_usage(*stick, InputElementKind::AXIS, 0x0001, 0x0030)));
+    set_axis_mapping(out, OutputAxis::Y,  src_from_element(*stick, find_element_by_usage(*stick, InputElementKind::AXIS, 0x0001, 0x0031)));
 
     // Prefer the stick twist (Rz) as a standalone axis (often used as "rudder" when pedals are absent).
     // IMPORTANT: We treat output axis Z as the *primary rudder* axis for BLE compatibility.
     // Only map stick twist (Rz) to RZ when pedals are present (so Z can remain reserved for pedal rudder).
     if (ped) {
       set_axis_mapping(out, OutputAxis::RZ,
-                       src_from_element(*stick, find_element_by_usage(*stick, IE_KIND_AXIS, 0x0001, 0x0035)));
+                       src_from_element(*stick, find_element_by_usage(*stick, InputElementKind::AXIS, 0x0001, 0x0035)));
     }
 
     // D-pad / POV hat
-    set_axis_mapping(out, OutputAxis::HAT, src_from_element(*stick, find_element_by_usage(*stick, IE_KIND_HAT,  0x0001, 0x0039)));
+    set_axis_mapping(out, OutputAxis::HAT, src_from_element(*stick, find_element_by_usage(*stick, InputElementKind::HAT,  0x0001, 0x0039)));
   }
 
   // Throttle
   if (thr) {
     const InputElement *e = nullptr;
-    e = find_element_by_usage(*thr, IE_KIND_AXIS, 0x0002, 0x00BB);  // Simulation Throttle
-    if (!e) e = find_element_by_usage(*thr, IE_KIND_AXIS, 0x0001, 0x0036);  // Desktop Slider
-    if (!e) e = find_element_by_usage(*thr, IE_KIND_AXIS, 0x0001, 0x0032);  // Desktop Z
+    e = find_element_by_usage(*thr, InputElementKind::AXIS, 0x0002, 0x00BB);  // Simulation Throttle
+    if (!e) e = find_element_by_usage(*thr, InputElementKind::AXIS, 0x0001, 0x0036);  // Desktop Slider
+    if (!e) e = find_element_by_usage(*thr, InputElementKind::AXIS, 0x0001, 0x0032);  // Desktop Z
     if (!e) e = find_first_axis_like(*thr);
     set_axis_mapping(out, OutputAxis::SLIDER1, src_from_element(*thr, e));
 
     // If pedals are present, we can expose extra twist/rocker as RZ. If pedals are absent,
     // leave RZ unmapped to avoid duplicating the primary rudder axis (Z).
     if (ped && !out.axes[(size_t)OutputAxis::RZ].configured) {
-      const InputElement *rz = find_element_by_usage(*thr, IE_KIND_AXIS, 0x0001, 0x0035);
+      const InputElement *rz = find_element_by_usage(*thr, InputElementKind::AXIS, 0x0001, 0x0035);
       if (rz) set_axis_mapping(out, OutputAxis::RZ, src_from_element(*thr, rz));
     }
   }
@@ -272,16 +272,16 @@ static void build_default_profile(const HidDeviceContext *devices, size_t num_de
   if (ped) {
     // Rudder: prefer Simulation Controls Rudder; otherwise, many pedals expose it as Z.
     const InputElement *rud = nullptr;
-    rud = find_element_by_usage(*ped, IE_KIND_AXIS, 0x0002, 0x00BA);  // Simulation Rudder
-    if (!rud) rud = find_element_by_usage(*ped, IE_KIND_AXIS, 0x0001, 0x0032);  // Z
-    if (!rud) rud = find_element_by_usage(*ped, IE_KIND_AXIS, 0x0001, 0x0035);  // Rz
-    if (!rud) rud = find_element_by_usage(*ped, IE_KIND_AXIS, 0x0001, 0x0036);  // Slider
+    rud = find_element_by_usage(*ped, InputElementKind::AXIS, 0x0002, 0x00BA);  // Simulation Rudder
+    if (!rud) rud = find_element_by_usage(*ped, InputElementKind::AXIS, 0x0001, 0x0032);  // Z
+    if (!rud) rud = find_element_by_usage(*ped, InputElementKind::AXIS, 0x0001, 0x0035);  // Rz
+    if (!rud) rud = find_element_by_usage(*ped, InputElementKind::AXIS, 0x0001, 0x0036);  // Slider
     if (!rud) rud = find_first_axis_like(*ped);
     set_axis_mapping(out, OutputAxis::Z, src_from_element(*ped, rud));
 
     // Toe brakes: try Rx/Ry first (common for pedals). If missing, try Simulation Brake usages.
-    const InputElement *brk_l = find_element_by_usage(*ped, IE_KIND_AXIS, 0x0001, 0x0033);  // Rx
-    const InputElement *brk_r = find_element_by_usage(*ped, IE_KIND_AXIS, 0x0001, 0x0034);  // Ry
+    const InputElement *brk_l = find_element_by_usage(*ped, InputElementKind::AXIS, 0x0001, 0x0033);  // Rx
+    const InputElement *brk_r = find_element_by_usage(*ped, InputElementKind::AXIS, 0x0001, 0x0034);  // Ry
 
     if (!brk_l || !brk_r) {
       const InputElement *a = nullptr;
@@ -299,7 +299,7 @@ static void build_default_profile(const HidDeviceContext *devices, size_t num_de
     int toe_count = count_toe_brake_elements(*ped);
     if (toe_count == 1) {
       set_axis_mapping(out, OutputAxis::SLIDER2,
-                       src_from_element(*ped, find_element_by_usage(*ped, IE_KIND_AXIS, 0x0002, 0x00BF)));
+                       src_from_element(*ped, find_element_by_usage(*ped, InputElementKind::AXIS, 0x0002, 0x00BF)));
     } else if (toe_count > 1) {
       AxisSource s;
       s.device_id = make_device_id(*ped);
@@ -310,11 +310,11 @@ static void build_default_profile(const HidDeviceContext *devices, size_t num_de
 
   // If pedals are absent, try to map brake-like axes from throttle (common on HOTAS throttles).
   if (!out.axes[(size_t)OutputAxis::RX].configured && thr) {
-    const InputElement *e = find_element_by_usage(*thr, IE_KIND_AXIS, 0x0001, 0x0033);  // Rx
+    const InputElement *e = find_element_by_usage(*thr, InputElementKind::AXIS, 0x0001, 0x0033);  // Rx
     if (e) set_axis_mapping(out, OutputAxis::RX, src_from_element(*thr, e));
   }
   if (!out.axes[(size_t)OutputAxis::RY].configured && thr) {
-    const InputElement *e = find_element_by_usage(*thr, IE_KIND_AXIS, 0x0001, 0x0034);  // Ry
+    const InputElement *e = find_element_by_usage(*thr, InputElementKind::AXIS, 0x0001, 0x0034);  // Ry
     if (e) set_axis_mapping(out, OutputAxis::RY, src_from_element(*thr, e));
   }
   // If pedals absent, bind the primary rudder axis (Z) deterministically.
@@ -324,11 +324,11 @@ static void build_default_profile(const HidDeviceContext *devices, size_t num_de
     const InputElement *e = nullptr;
 
     if (stick) {
-      e = find_element_by_usage(*stick, IE_KIND_AXIS, 0x0001, 0x0035);  // stick twist
+      e = find_element_by_usage(*stick, InputElementKind::AXIS, 0x0001, 0x0035);  // stick twist
       if (e) src_dev = stick;
     }
     if (!e && thr) {
-      e = find_element_by_usage(*thr, IE_KIND_AXIS, 0x0001, 0x0035);  // throttle rocker / twist
+      e = find_element_by_usage(*thr, InputElementKind::AXIS, 0x0001, 0x0035);  // throttle rocker / twist
       if (e) src_dev = thr;
     }
     if (!e && stick) {
@@ -383,12 +383,22 @@ static float apply_deadzone_unipolar(float v, float inner, float outer) {
 }
 
 static float cubic_bezier(float a, float b, float c, float d, float t) {
+  if (t <= 0.0f) return a;
+  if (t >= 1.0f) return d;
   const float mt = 1.0f - t;
   return mt * mt * mt * a + 3.0f * mt * mt * t * b + 3.0f * mt * t * t * c + t * t * t * d;
 }
 
 static float apply_bezier_curve01(float x, const AxisModifiers &mod) {
   x = clamp01(x);
+
+  // Fast path for identity
+  if (x <= 0.0f) return 0.0f;
+  if (x >= 1.0f) return 1.0f;
+  if (mod.bezier_p1x == 0.25f && mod.bezier_p1y == 0.25f && mod.bezier_p2x == 0.75f && mod.bezier_p2y == 0.75f) {
+      return x;
+  }
+
   const float p1x = clamp01(mod.bezier_p1x);
   const float p1y = clamp01(mod.bezier_p1y);
   const float p2x = clamp01(mod.bezier_p2x);
@@ -536,6 +546,38 @@ std::string mapping_engine_profile_to_json() {
   return out;
 }
 
+// Helper to safely extract strongly-typed optional values from cJSON nodes
+struct JsonExtractor {
+  static bool get_bool(const cJSON *obj, const char *key, bool default_val = false) {
+    if (!obj) return default_val;
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (!item) return default_val;
+    if (cJSON_IsTrue(item)) return true;
+    if (cJSON_IsFalse(item)) return false;
+    return default_val;
+  }
+
+  static bool has_bool(const cJSON *obj, const char *key) {
+    if (!obj) return false;
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return item && cJSON_IsBool(item);
+  }
+
+  static float get_float(const cJSON *obj, const char *key, float default_val = 0.0f) {
+    if (!obj) return default_val;
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (cJSON_IsNumber(item)) return (float)item->valuedouble;
+    return default_val;
+  }
+
+  static uint32_t get_u32(const cJSON *obj, const char *key, uint32_t default_val = 0) {
+    if (!obj) return default_val;
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (cJSON_IsNumber(item)) return (uint32_t)item->valuedouble;
+    return default_val;
+  }
+};
+
 static bool parse_axis_mapping_patch(OutputAxis axis, const cJSON *node, AxisMapping *mapping,
                                      std::string *error_out) {
   if (!node || !mapping) return false;
@@ -550,52 +592,48 @@ static bool parse_axis_mapping_patch(OutputAxis axis, const cJSON *node, AxisMap
 
   AxisMapping next = *mapping;
 
-  cJSON *configured = cJSON_GetObjectItemCaseSensitive(node, "configured");
-  if (cJSON_IsBool(configured) && !cJSON_IsTrue(configured)) {
+  if (JsonExtractor::has_bool(node, "configured") && !JsonExtractor::get_bool(node, "configured")) {
     *mapping = AxisMapping{};
     return true;
   }
 
-  cJSON *device_id = cJSON_GetObjectItemCaseSensitive(node, "device_id");
-  if (cJSON_IsNumber(device_id)) next.source.device_id = (DeviceId)device_id->valuedouble;
+  next.source.device_id = JsonExtractor::get_u32(node, "device_id", next.source.device_id);
+  next.source.element_id = JsonExtractor::get_u32(node, "element_id", next.source.element_id);
 
-  cJSON *element_id = cJSON_GetObjectItemCaseSensitive(node, "element_id");
-  if (cJSON_IsNumber(element_id)) next.source.element_id = (ElementId)element_id->valuedouble;
-
-  cJSON *invert = cJSON_GetObjectItemCaseSensitive(node, "invert");
-  if (cJSON_IsBool(invert)) next.mod.invert = cJSON_IsTrue(invert);
+  if (JsonExtractor::has_bool(node, "invert")) {
+    next.mod.invert = JsonExtractor::get_bool(node, "invert");
+  }
 
   cJSON *deadzone = cJSON_GetObjectItemCaseSensitive(node, "deadzone");
   if (cJSON_IsNumber(deadzone)) {
     next.mod.deadzone_inner = (float)deadzone->valuedouble; // legacy scalar support
   } else if (cJSON_IsObject(deadzone)) {
-    cJSON *inner = cJSON_GetObjectItemCaseSensitive(deadzone, "inner");
-    if (cJSON_IsNumber(inner)) next.mod.deadzone_inner = (float)inner->valuedouble;
-    cJSON *outer = cJSON_GetObjectItemCaseSensitive(deadzone, "outer");
-    if (cJSON_IsNumber(outer)) next.mod.outer_clamp = (float)outer->valuedouble;
+    next.mod.deadzone_inner = JsonExtractor::get_float(deadzone, "inner", next.mod.deadzone_inner);
+    next.mod.outer_clamp = JsonExtractor::get_float(deadzone, "outer", next.mod.outer_clamp);
   }
 
+  // Fallback for legacy "outer_clamp" on root mapping node
   cJSON *outer_clamp = cJSON_GetObjectItemCaseSensitive(node, "outer_clamp");
-  if (cJSON_IsNumber(outer_clamp)) next.mod.outer_clamp = (float)outer_clamp->valuedouble;
+  if (cJSON_IsNumber(outer_clamp)) {
+    next.mod.outer_clamp = (float)outer_clamp->valuedouble;
+  }
 
   cJSON *smoothing = cJSON_GetObjectItemCaseSensitive(node, "smoothing_alpha");
-  if (cJSON_IsNumber(smoothing)) next.mod.smoothing_alpha = (float)smoothing->valuedouble;
+  if (cJSON_IsNumber(smoothing)) {
+    next.mod.smoothing_alpha = (float)smoothing->valuedouble;
+  }
 
   cJSON *curve = cJSON_GetObjectItemCaseSensitive(node, "curve");
   if (cJSON_IsObject(curve)) {
     cJSON *p1 = cJSON_GetObjectItemCaseSensitive(curve, "p1");
     if (cJSON_IsObject(p1)) {
-      cJSON *x = cJSON_GetObjectItemCaseSensitive(p1, "x");
-      cJSON *y = cJSON_GetObjectItemCaseSensitive(p1, "y");
-      if (cJSON_IsNumber(x)) next.mod.bezier_p1x = (float)x->valuedouble;
-      if (cJSON_IsNumber(y)) next.mod.bezier_p1y = (float)y->valuedouble;
+      next.mod.bezier_p1x = JsonExtractor::get_float(p1, "x", next.mod.bezier_p1x);
+      next.mod.bezier_p1y = JsonExtractor::get_float(p1, "y", next.mod.bezier_p1y);
     }
     cJSON *p2 = cJSON_GetObjectItemCaseSensitive(curve, "p2");
     if (cJSON_IsObject(p2)) {
-      cJSON *x = cJSON_GetObjectItemCaseSensitive(p2, "x");
-      cJSON *y = cJSON_GetObjectItemCaseSensitive(p2, "y");
-      if (cJSON_IsNumber(x)) next.mod.bezier_p2x = (float)x->valuedouble;
-      if (cJSON_IsNumber(y)) next.mod.bezier_p2y = (float)y->valuedouble;
+      next.mod.bezier_p2x = JsonExtractor::get_float(p2, "x", next.mod.bezier_p2x);
+      next.mod.bezier_p2y = JsonExtractor::get_float(p2, "y", next.mod.bezier_p2y);
     }
   }
 
@@ -604,16 +642,21 @@ static bool parse_axis_mapping_patch(OutputAxis axis, const cJSON *node, AxisMap
     return false;
   }
 
+  // Contract: Modifiers must be in valid ranges before assignment.
   next.mod.deadzone_inner = clamp01(next.mod.deadzone_inner);
   if (next.mod.deadzone_inner > 0.99f) next.mod.deadzone_inner = 0.99f;
+
   next.mod.outer_clamp = clamp01(next.mod.outer_clamp);
   if (next.mod.outer_clamp > 0.99f) next.mod.outer_clamp = 0.99f;
+
+  // Invariant: Deadzones cannot overlap or leave no active range.
   if (next.mod.deadzone_inner + next.mod.outer_clamp > 0.98f) {
     next.mod.outer_clamp = 0.98f - next.mod.deadzone_inner;
     if (next.mod.outer_clamp < 0.0f) next.mod.outer_clamp = 0.0f;
   }
-  if (next.mod.smoothing_alpha < 0.0f) next.mod.smoothing_alpha = 0.0f;
-  if (next.mod.smoothing_alpha > 1.0f) next.mod.smoothing_alpha = 1.0f;
+
+  next.mod.smoothing_alpha = clamp01(next.mod.smoothing_alpha);
+
   next.mod.bezier_p1x = clamp01(next.mod.bezier_p1x);
   next.mod.bezier_p1y = clamp01(next.mod.bezier_p1y);
   next.mod.bezier_p2x = clamp01(next.mod.bezier_p2x);
@@ -781,7 +824,10 @@ void mapping_engine_compute(const HidDeviceContext *devices, size_t num_devices,
     const auto &m = g_profile.axes[(size_t)OutputAxis::HAT];
     if (m.configured && m.source.is_valid()) {
       const HidDeviceContext *dev = find_device_by_id(devices, num_devices, m.source.device_id);
-      if (dev) out->hat = read_hat_value(*dev, m.source.element_id);
+      if (dev) {
+          uint8_t raw_hat = read_hat_value(*dev, m.source.element_id);
+          out->hat = (raw_hat <= 8) ? static_cast<HatDirection>(raw_hat) : HatDirection::CENTER;
+      }
     }
   }
 

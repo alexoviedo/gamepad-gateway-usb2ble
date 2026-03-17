@@ -60,6 +60,7 @@ static int16_t normalize_axis(int32_t val, int32_t min, int32_t max) {
     return 32767;
 
   int64_t range = (int64_t)max - (int64_t)min;
+  if (range == 0) return 0;
   int64_t v = (int64_t)val - min;
   int64_t mapped = (v * 65534LL) / range;
   mapped -= 32767;
@@ -92,7 +93,8 @@ static void adapt_elements_to_gamepad_state(const HidDeviceCaps *caps, GamepadSt
 
     // Hat
     if (e.usage_page == 0x01 && e.usage == 0x39) {
-      s.hat = normalize_hat(e.raw, e.logical_min, e.logical_max);
+      uint8_t h = normalize_hat(e.raw, e.logical_min, e.logical_max);
+      s.hat = (h <= 8) ? static_cast<HatDirection>(h) : HatDirection::CENTER;
       continue;
     }
 

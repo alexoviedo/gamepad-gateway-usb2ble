@@ -9,12 +9,20 @@
 #define MAX_INPUT_ELEMENTS 256
 #endif
 
-typedef enum {
-  IE_KIND_AXIS = 0,
-  IE_KIND_BUTTON = 1,
-  IE_KIND_HAT = 2,
-  IE_KIND_OTHER = 3,
-} InputElementKind;
+#ifdef __cplusplus
+enum class InputElementKind : uint8_t {
+  AXIS = 0,
+  BUTTON = 1,
+  HAT = 2,
+  OTHER = 3,
+};
+#else
+typedef uint8_t InputElementKind;
+#define IE_KIND_AXIS   ((InputElementKind)0)
+#define IE_KIND_BUTTON ((InputElementKind)1)
+#define IE_KIND_HAT    ((InputElementKind)2)
+#define IE_KIND_OTHER  ((InputElementKind)3)
+#endif
 
 // A generic descriptor-derived INPUT element.
 //

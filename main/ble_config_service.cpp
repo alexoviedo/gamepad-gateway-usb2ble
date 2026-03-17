@@ -188,9 +188,9 @@ static const char *role_to_str(uint8_t role) {
 
 static const char *element_kind_code(InputElementKind kind) {
   switch (kind) {
-    case IE_KIND_BUTTON: return "b";
-    case IE_KIND_AXIS: return "a";
-    case IE_KIND_HAT: return "h";
+    case InputElementKind::BUTTON: return "b";
+    case InputElementKind::AXIS: return "a";
+    case InputElementKind::HAT: return "h";
     default: return "o";
   }
 }
@@ -348,13 +348,27 @@ static void cmd_reboot_to(app_mode_t mode, cJSON *resp) {
 }
 
 static void handle_cmd_json(const char *json, size_t len) {
+  // Safety: Prevent excessive payload processing
+  constexpr size_t kMaxCmdBytes = 1024;
+  if (len > kMaxCmdBytes) {
+      ESP_LOGE(TAG, "CMD payload exceeds max length: %zu", len);
+      return;
+  }
+
   cJSON *req = cJSON_ParseWithLength(json, len);
   cJSON *resp = cJSON_CreateObject();
+
+  if (!resp) {
+      if (req) cJSON_Delete(req);
+      return; // OOM
+  }
 
   cJSON_AddStringToObject(resp, "evt", "resp");
 
   if (!req) {
     cJSON_AddStringToObject(resp, "error", "invalid_json");
+  } else if (!cJSON_IsObject(req)) {
+    cJSON_AddStringToObject(resp, "error", "payload_not_object");
   } else {
     cJSON *rid = cJSON_GetObjectItemCaseSensitive(req, "rid");
     if (cJSON_IsNumber(rid)) {
@@ -686,7 +700,7 @@ void ble_config_service_stream_tick(void) {
   uint32_t best_update = 0;
   for (size_t i = 0; i < m; i++) {
     const auto k = elems[i].kind;
-    if (k != IE_KIND_AXIS && k != IE_KIND_HAT && k != IE_KIND_BUTTON) continue;
+    if (k != InputElementKind::AXIS && k != InputElementKind::HAT && k != InputElementKind::BUTTON) continue;
     if (elems[i].last_update_ms >= best_update) {
       best_update = elems[i].last_update_ms;
       picked = i;
@@ -698,7 +712,7 @@ void ble_config_service_stream_tick(void) {
     for (size_t tries = 0; tries < m; tries++) {
       const size_t idx = (size_t)(g_stream_elem_cursor++ % (uint16_t)m);
       const auto k = elems[idx].kind;
-      if (k == IE_KIND_AXIS || k == IE_KIND_HAT || k == IE_KIND_BUTTON) {
+      if (k == InputElementKind::AXIS || k == InputElementKind::HAT || k == InputElementKind::BUTTON) {
         picked = idx;
         break;
       }
