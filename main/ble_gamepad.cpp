@@ -397,6 +397,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
       g_ble_connected = true;
       g_input_notify_enabled = false;
       g_battery_notify_enabled = false;
+      g_force_send_once = true;
       ESP_LOGI(TAG, "Connected (handle=%d)", (int)g_conn_handle);
 
       if (g_is_config_mode) {
@@ -729,15 +730,25 @@ void ble_config_init(void) {
 }
 
 void ble_gamepad_send_state(const GamepadState *s) {
+  if (!s) {
+    return;
+  }
   if (g_is_config_mode) {
     return;
   }
   if (!g_ble_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
     return;
   }
-  if (!g_input_notify_enabled) {
+  if (g_hid_report_handle == 0) {
     return;
   }
+  // Do not gate input report delivery on a local subscribe flag.
+  // For bonded hosts, NimBLE can restore CCCD state from persistent storage
+  // across reconnects / reboots without emitting a fresh SUBSCRIBE callback.
+  // When that happens, g_input_notify_enabled may remain false even though the
+  // peer is still subscribed, which causes a silent reconnect regression in
+  // Windows joy.cpl. We still track the flag for logging, but let NimBLE decide
+  // whether any connected peer is currently subscribed.
 
   uint8_t next[kInputReportSize];
   memset(next, 0, sizeof(next));
@@ -767,10 +778,8 @@ void ble_gamepad_send_state(const GamepadState *s) {
   g_force_send_once = false;
   memcpy(g_last_report, next, sizeof(g_last_report));
 
-  struct os_mbuf *om = ble_hs_mbuf_from_flat(g_last_report, sizeof(g_last_report));
-  if (!om) {
-    return;
-  }
-
-  (void)ble_gatts_notify_custom(g_conn_handle, g_hid_report_handle, om);
+  // Ask NimBLE to notify any connected peer that is currently subscribed to
+  // the HID input report characteristic. NimBLE consults its own CCCD state,
+  // including restored subscriptions for bonded peers.
+  ble_gatts_chr_updated(g_hid_report_handle);
 }

@@ -37,7 +37,7 @@ enum class OutputAxis : uint8_t {
 using DeviceId = uint32_t;
 
 // ElementId is stable within a device (assigned by the report descriptor parser).
-using ElementId = uint16_t;
+using ElementId = uint32_t;
 
 struct AxisSource {
   DeviceId device_id = 0;
