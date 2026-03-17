@@ -102,18 +102,6 @@ const char *axis_name(OutputAxis a) {
     default: return "?";
   }
 }
-static bool output_axis_from_name(const char *name, OutputAxis *out) {
-  if (!name || !out) return false;
-  for (size_t i = 0; i < (size_t)OutputAxis::COUNT; i++) {
-    OutputAxis axis = (OutputAxis)i;
-    if (strcmp(name, axis_name(axis)) == 0) {
-      *out = axis;
-      return true;
-    }
-  }
-  return false;
-}
-
 
 static const HidDeviceContext *find_device_for_role(const HidDeviceContext *devices,
                                                     size_t num_devices,
@@ -235,10 +223,11 @@ static void build_default_profile(const HidDeviceContext *devices, size_t num_de
   }
 
   ESP_LOGI(TAG,
-           "Default mapping devices: stick=%s thr=%s ped=%s",
+           "Default mapping devices: stick=%s thr=%s ped=%s embedded_pedals=%s",
            stick ? "yes" : "no",
            thr   ? "yes" : "no",
-           ped   ? "yes" : "no");
+           ped   ? "yes" : "no",
+           embedded_pedals ? "yes" : "no");
   ESP_LOGI(TAG,
            "  ids: stick=0x%08x thr=0x%08x ped=0x%08x",
            stick ? (uint32_t)make_device_id(*stick) : 0u,

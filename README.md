@@ -100,7 +100,7 @@ Declared in `idf_component.yml`:
 
 * `espressif/usb` (`>= 1.2.0`)
 
-  * `dependencies.lock` pins it to **1.2.0**
+  * `dependencies.lock` currently pins it to **1.3.0**
 * `espressif/usb_host_hid` (`>= 1.0.0`)
 
   * `dependencies.lock` pins it to **1.1.0**
@@ -127,7 +127,7 @@ Install ESP-IDF using Espressif’s official installer / tooling for your OS, en
 
 ```bash
 git clone https://github.com/alexoviedo/gamepad-gateway-usb2ble.git
-cd HOTAS_BRIDGE_MERGED
+cd gamepad-gateway-usb2ble
 ```
 
 ### 3) Activate the ESP-IDF environment

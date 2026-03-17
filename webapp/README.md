@@ -122,9 +122,8 @@ Release feeds are generated into `webapp/firmware/` by:
 python3 ../scripts/generate_firmware_manifest.py ...
 ```
 
-For automated packaging and publish-ready artifacts, see:
+For packaging and publish-ready artifacts, see:
 
 ```text
-.github/workflows/release-firmware.yml
 docs/FIRMWARE_RELEASES.md
 ```

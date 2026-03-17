@@ -73,20 +73,20 @@ Outputs:
 - `webapp/firmware/releases/<version>/SHA256SUMS.txt`
 - `webapp/firmware/<channel>/latest.json`
 
-## GitHub Actions workflow
+## Automation
 
-`.github/workflows/release-firmware.yml` does the following:
+This repo includes the manifest-generation script, but it does not currently include a checked-in GitHub Actions workflow. A release pipeline you add later should:
 
-1. installs ESP-IDF
-2. builds the firmware
-3. generates the web-flashing manifests
-4. stages both GitHub Release assets and static-host files
-5. uploads packaged artifacts
-6. publishes release assets when triggered by a tag
+1. install ESP-IDF
+2. build the firmware
+3. generate the web-flashing manifests
+4. stage both GitHub Release assets and static-host files
+5. upload packaged artifacts
+6. publish release assets when triggered by a tag
 
 ## Static hosting
 
-The workflow produces `dist/web-root`, which can be deployed to a static host.
+Deploy the contents of `webapp/firmware/` (or a staged copy of it) to your static host.
 
 Suggested structure:
 
