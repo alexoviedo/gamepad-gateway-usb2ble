@@ -73,7 +73,7 @@ static esp_err_t portal_get_handler(httpd_req_t *req) {
            "Buttons: 0x%08X\n"
            "</pre></body></html>",
            state.x, state.y, state.z, state.rx, state.ry, state.rz,
-           state.slider1, state.slider2, state.hat,
+           state.slider1, state.slider2, static_cast<uint8_t>(state.hat),
            (unsigned int)state.buttons);
 
   httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);

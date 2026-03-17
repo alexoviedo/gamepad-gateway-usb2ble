@@ -59,8 +59,9 @@ static inline uint16_t to_u16_axis(int16_t v) {
   return (uint16_t)(t >> 1); // 0..32767
 }
 
-static inline uint8_t clamp_hat(uint8_t hat) {
-  return (hat <= 8) ? hat : 0;
+static inline uint8_t clamp_hat(HatDirection hat) {
+  uint8_t raw = static_cast<uint8_t>(hat);
+  return (raw <= 8) ? raw : 0;
 }
 
 static inline void put_u16_le(uint8_t *dst, uint16_t v) {
@@ -769,7 +770,7 @@ void ble_gamepad_send_state(const GamepadState *s) {
   put_u16_le(&next[14], to_u16_axis(s->ry));
   put_u16_le(&next[16], to_u16_axis(s->slider1));
   put_u16_le(&next[18], to_u16_axis(s->slider2));
-  next[20] = clamp_hat((uint8_t)s->hat);
+  next[20] = clamp_hat(s->hat);
 
   if (!g_force_send_once && memcmp(next, g_last_report, sizeof(next)) == 0) {
     return;

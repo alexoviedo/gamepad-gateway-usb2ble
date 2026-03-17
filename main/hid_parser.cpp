@@ -35,7 +35,9 @@ static int32_t sign_extend(uint32_t val, int bits) {
 
 void hid_parse_report_descriptor(const uint8_t *desc, size_t len,
                                  HidDeviceCaps *caps) {
+  if (!caps) return;
   memset(caps, 0, sizeof(HidDeviceCaps));
+  if (!desc || len == 0) return;
 
   GlobalState gstate = {0, 0, 0, 0, 0, 0};
   LocalState lstate = {{0}, 0, 0, 0};
@@ -204,7 +206,7 @@ void hid_parse_report_descriptor(const uint8_t *desc, size_t len,
   for (uint32_t i = 0; i < caps->num_elements; i++) {
     const InputElement &e = caps->elements[i];
 
-    if (e.kind == IE_KIND_AXIS) {
+    if (e.kind == InputElementKind::AXIS) {
       rm.axes++;
       if (e.usage_page == 0x0001) {
         if (e.usage == 0x0030) rm.has_x = true;
@@ -221,9 +223,9 @@ void hid_parse_report_descriptor(const uint8_t *desc, size_t len,
         if (e.usage == 0x00BA) rm.sim_rudder++;
         if (e.usage == 0x00BF) rm.sim_brake++;
       }
-    } else if (e.kind == IE_KIND_BUTTON) {
+    } else if (e.kind == InputElementKind::BUTTON) {
       rm.buttons++;
-    } else if (e.kind == IE_KIND_HAT) {
+    } else if (e.kind == InputElementKind::HAT) {
       rm.hats++;
     }
   }
