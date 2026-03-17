@@ -59,6 +59,11 @@ const elements = {
   refreshDevicesBtn: document.getElementById('refreshDevicesBtn'),
   readConfigBtn: document.getElementById('readConfigBtn'),
   saveProfileBtn: document.getElementById('saveProfileBtn'),
+  rebootRunBtn: document.getElementById('rebootRunBtn'),
+  exportProfileBtn: document.getElementById('exportProfileBtn'),
+  importProfileBtn: document.getElementById('importProfileBtn'),
+  importProfileInput: document.getElementById('importProfileInput'),
+  resetProfileBtn: document.getElementById('resetProfileBtn'),
   startStreamBtn: document.getElementById('startStreamBtn'),
   stopStreamBtn: document.getElementById('stopStreamBtn'),
   loadDescriptorBtn: document.getElementById('loadDescriptorBtn'),
@@ -1264,6 +1269,10 @@ function renderConnectionState() {
   elements.refreshDevicesBtn.disabled = !connected;
   elements.readConfigBtn.disabled = !connected;
   elements.saveProfileBtn.disabled = !connected || !client.pendingChanges;
+  elements.rebootRunBtn.disabled = !connected;
+  elements.exportProfileBtn.disabled = !connected;
+  elements.importProfileBtn.disabled = !connected;
+  elements.resetProfileBtn.disabled = !connected;
   elements.startStreamBtn.disabled = !connected || client.streamActive;
   elements.stopStreamBtn.disabled = !connected || !client.streamActive;
   elements.wizardStartBtn.disabled = !connected || wizard.state === 'detecting';
@@ -1581,6 +1590,75 @@ elements.saveProfileBtn.addEventListener('click', () => guarded(async () => {
   const response = await client.saveProfile();
   log('Save profile', response.note || 'Profile marked saved');
 }, 'Failed to save profile'));
+
+elements.rebootRunBtn.addEventListener('click', () => guarded(async () => {
+  const response = await client.sendCommand({ cmd: 'reboot_to_run' });
+  log('Reboot to Run Mode', response.rebooting_to || 'ok');
+}, 'Failed to send reboot command'));
+
+elements.exportProfileBtn.addEventListener('click', () => {
+  if (!client.currentConfig) {
+    log('Export', 'No config to export');
+    return;
+  }
+  const data = JSON.stringify(client.currentConfig, null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'hotas_profile.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  log('Export', 'Profile exported to hotas_profile.json');
+});
+
+elements.importProfileBtn.addEventListener('click', () => {
+  elements.importProfileInput.click();
+});
+
+elements.importProfileInput.addEventListener('change', (e) => guarded(async () => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const text = await file.text();
+  try {
+    const config = JSON.parse(text);
+    config.replace_all = true;
+    const response = await client.sendCommand({ cmd: 'set_config', config });
+    if (response.config) {
+      client.currentConfig = ensureConfigShape(response.config);
+      client.pendingChanges = true;
+      renderConnectionState();
+      renderMappingsSummary();
+      log('Import', 'Profile imported successfully');
+    } else {
+      log('Import', 'Failed to import profile: ' + JSON.stringify(response));
+    }
+  } catch (err) {
+    log('Import', 'Failed to parse JSON: ' + err.message);
+  } finally {
+    e.target.value = ''; // Reset input
+  }
+}, 'Failed to import profile'));
+
+elements.resetProfileBtn.addEventListener('click', () => guarded(async () => {
+  if (!confirm('Are you sure you want to reset the profile to default? This will clear all mappings and curves.')) {
+    return;
+  }
+  const config = { replace_all: true };
+  const response = await client.sendCommand({ cmd: 'set_config', config });
+  if (response.config) {
+    client.currentConfig = ensureConfigShape(response.config);
+    client.pendingChanges = true;
+    renderConnectionState();
+    renderMappingsSummary();
+    log('Reset', 'Profile reset to default');
+  } else {
+    log('Reset', 'Failed to reset profile: ' + JSON.stringify(response));
+  }
+}, 'Failed to reset profile'));
 
 elements.startStreamBtn.addEventListener('click', () => guarded(async () => {
   await client.startStream();
