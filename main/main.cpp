@@ -30,7 +30,7 @@
 //   * remap sliders to different axes
 //
 // Keep this function fast and non-blocking.
-static inline int16_t apply_deadzone(int16_t v, int16_t dz) {
+static [[maybe_unused]] inline int16_t apply_deadzone(int16_t v, int16_t dz) {
   if (v > -dz && v < dz)
     return 0;
   return v;

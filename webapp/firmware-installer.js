@@ -5,6 +5,10 @@ const HOTAS_FIRMWARE_FEEDS = {
 
 const HOTAS_FLASHER_SCRIPT = 'https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module';
 
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function firmwareFeatureSupport() {
   return {
     bluetooth: 'bluetooth' in navigator,
@@ -222,7 +226,7 @@ async function hydrateFirmwareUi(meta, sourceUrl) {
       if (manualManifestInput && !manualManifestInput.value) manualManifestInput.value = meta.manifestUrl;
     } catch (error) {
       if (installHost) {
-        installHost.innerHTML = `<div class="banner">${error.message}</div>`;
+        installHost.innerHTML = `<div class="banner">${errorMessage(error)}</div>`;
       }
       setStatusPill('firmwareManifestPill', 'Installer unavailable', 'warn');
     }
@@ -245,7 +249,7 @@ async function loadFeedIntoUi(url) {
     setStatusPill('firmwareFeedPill', 'Feed unavailable', 'warn');
     const installHost = document.getElementById('firmwareInstallHost');
     if (installHost) {
-      installHost.innerHTML = `<div class="empty-state">${error.message}</div>`;
+      installHost.innerHTML = `<div class="empty-state">${errorMessage(error)}</div>`;
     }
     setText('firmwareReleaseNotes', 'No published release feed could be loaded. You can still paste a custom manifest URL below for testing.');
     throw error;
@@ -274,7 +278,9 @@ function attachFirmwarePageEvents() {
       const url = HOTAS_FIRMWARE_FEEDS[channelSelect.value] || channelSelect.value;
       try {
         await loadFeedIntoUi(url);
-      } catch {}
+      } catch (error) {
+        console.warn('Unable to refresh firmware feed.', error);
+      }
     });
   }
 
@@ -284,7 +290,9 @@ function attachFirmwarePageEvents() {
       const url = HOTAS_FIRMWARE_FEEDS[selected] || selected;
       try {
         await loadFeedIntoUi(url);
-      } catch {}
+      } catch (error) {
+        console.warn('Unable to refresh firmware feed.', error);
+      }
     });
   }
 
@@ -294,7 +302,7 @@ function attachFirmwarePageEvents() {
         await loadCustomManifest(customManifestInput.value.trim());
       } catch (error) {
         const installHost = document.getElementById('firmwareInstallHost');
-        if (installHost) installHost.innerHTML = `<div class="banner">${error.message}</div>`;
+        if (installHost) installHost.innerHTML = `<div class="banner">${errorMessage(error)}</div>`;
         setStatusPill('firmwareManifestPill', 'Custom manifest failed', 'warn');
       }
     });
@@ -309,7 +317,8 @@ async function initializeFirmwareInstaller() {
   attachFirmwarePageEvents();
   try {
     await loadFeedIntoUi(HOTAS_FIRMWARE_FEEDS.stable);
-  } catch {
+  } catch (error) {
+    console.warn('Unable to load default firmware feed.', error);
     const compat = buildCompatCopy(firmwareFeatureSupport());
     setText('firmwareCompatText', compat.text);
   }

@@ -15,7 +15,7 @@ static const char *TAG = "HID_MGR";
 
 #define MAX_DEVICES 8
 static HidDeviceContext g_devices[MAX_DEVICES];
-static SemaphoreHandle_t g_state_mutex = NULL;
+static SemaphoreHandle_t g_state_mutex = nullptr;
 static GamepadState g_merged_state = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 static void print_device_caps(const HidDeviceContext *ctx) {
@@ -151,11 +151,11 @@ static void hid_init_device_task(void *arg) {
   hid_host_device_handle_t hid_device_handle = (hid_host_device_handle_t)arg;
 
   hid_host_device_config_t dev_config = {
-      .callback = hid_host_interface_callback, .callback_arg = NULL};
+      .callback = hid_host_interface_callback, .callback_arg = nullptr};
   esp_err_t err = hid_host_device_open(hid_device_handle, &dev_config);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to open HID device");
-    vTaskDelete(NULL);
+    vTaskDelete(nullptr);
     return;
   }
 
@@ -205,7 +205,7 @@ static void hid_init_device_task(void *arg) {
   // reports!
   hid_host_device_start(hid_device_handle);
 
-  vTaskDelete(NULL);
+  vTaskDelete(nullptr);
 }
 
 static void hid_host_driver_event_cb(hid_host_device_handle_t hid_device_handle,
@@ -214,7 +214,7 @@ static void hid_host_driver_event_cb(hid_host_device_handle_t hid_device_handle,
   if (event == HID_HOST_DRIVER_EVENT_CONNECTED) {
     ESP_LOGI(TAG, "HID Device Connected");
     xTaskCreate(hid_init_device_task, "hid_init_dev", 8192,
-                (void *)hid_device_handle, 5, NULL);
+                (void *)hid_device_handle, 5, nullptr);
   }
 }
 
@@ -246,7 +246,7 @@ void hid_device_manager_init(void) {
                                             .core_id = tskNO_AFFINITY,
                                             .callback =
                                                 hid_host_driver_event_cb,
-                                            .callback_arg = NULL};
+                                            .callback_arg = nullptr};
   esp_err_t err = hid_host_install(&driver_config);
   if (err == ESP_OK) {
     ESP_LOGI(TAG, "HID Class Driver installed");
@@ -264,11 +264,10 @@ void hid_device_manager_recompute_mapping(void) {
 }
 
 void hid_device_manager_get_merged_state(struct GamepadState *out_state) {
-  if (g_state_mutex) {
-    xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-    memcpy(out_state, &g_merged_state, sizeof(GamepadState));
-    xSemaphoreGive(g_state_mutex);
-  }
+  if (!out_state || !g_state_mutex) return;
+  xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+  memcpy(out_state, &g_merged_state, sizeof(GamepadState));
+  xSemaphoreGive(g_state_mutex);
 }
 
 // -----------------------------------------------------------------------------

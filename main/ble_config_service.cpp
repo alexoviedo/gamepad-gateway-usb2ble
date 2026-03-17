@@ -188,9 +188,9 @@ static const char *role_to_str(uint8_t role) {
 
 static const char *element_kind_code(InputElementKind kind) {
   switch (kind) {
-    case InputElementKind::BUTTON: return "b";
-    case InputElementKind::AXIS: return "a";
-    case InputElementKind::HAT: return "h";
+    case IE_KIND_BUTTON: return "b";
+    case IE_KIND_AXIS: return "a";
+    case IE_KIND_HAT: return "h";
     default: return "o";
   }
 }
@@ -544,16 +544,14 @@ static const struct ble_gatt_svc_def *build_cfg_svcs_once() {
   g_cfg_chrs[3].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE;
   g_cfg_chrs[3].val_handle = &g_cfg_handle;
 
-  // Terminator
-  g_cfg_chrs[4] = {0};
+  // g_cfg_chrs[4] stays zeroed by the memset above as the array terminator.
 
   // Service
   g_cfg_svcs[0].type = BLE_GATT_SVC_TYPE_PRIMARY;
   g_cfg_svcs[0].uuid = (ble_uuid_t *)&UUID_SVC_CFG;
   g_cfg_svcs[0].characteristics = g_cfg_chrs;
 
-  // Terminator
-  g_cfg_svcs[1] = {0};
+  // g_cfg_svcs[1] stays zeroed by the memset above as the array terminator.
 
   built = true;
   return g_cfg_svcs;

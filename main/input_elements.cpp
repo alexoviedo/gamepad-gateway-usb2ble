@@ -91,7 +91,7 @@ const char *ie_friendly_usage(uint16_t usage_page, uint16_t usage) {
     return "Button";
   }
 
-  return NULL;
+  return nullptr;
 }
 
 uint32_t ie_compute_id(uint16_t usage_page, uint16_t usage, uint8_t report_id,

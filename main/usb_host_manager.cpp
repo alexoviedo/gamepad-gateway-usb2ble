@@ -7,7 +7,7 @@
 #include <usb/usb_host.h>
 
 static const char *TAG = "USB_HOST_MGR";
-static usb_phy_handle_t phy_hdl = NULL;
+static usb_phy_handle_t phy_hdl = nullptr;
 
 static void usb_host_lib_daemon_task(void *arg) {
   bool has_clients = true;
@@ -29,7 +29,7 @@ static void usb_host_lib_daemon_task(void *arg) {
     }
   }
   ESP_LOGI(TAG, "USB Host Library task exiting");
-  vTaskDelete(NULL);
+  vTaskDelete(nullptr);
 }
 
 void usb_host_manager_init(void) {
@@ -41,8 +41,8 @@ void usb_host_manager_init(void) {
       .target = USB_PHY_TARGET_INT,
       .otg_mode = USB_OTG_MODE_HOST,
       .otg_speed = USB_PHY_SPEED_UNDEFINED, // auto
-      .ext_io_conf = NULL,
-      .otg_io_conf = NULL,
+      .ext_io_conf = nullptr,
+      .otg_io_conf = nullptr,
   };
   esp_err_t err = usb_new_phy(&phy_config, &phy_hdl);
   if (err != ESP_OK) {
@@ -61,6 +61,6 @@ void usb_host_manager_init(void) {
   }
 
   // Start daemon task
-  xTaskCreate(usb_host_lib_daemon_task, "usb_events", 4096, NULL, 5, NULL);
+  xTaskCreate(usb_host_lib_daemon_task, "usb_events", 4096, nullptr, 5, nullptr);
   ESP_LOGI(TAG, "USB Host initialized and daemon started.");
 }

@@ -63,6 +63,7 @@ void mapping_engine_notify_devices_changed() {
 
 void mapping_engine_mark_profile_dirty() {
   if (g_profile_mutex) xSemaphoreTake(g_profile_mutex, portMAX_DELAY);
+  g_profile_dirty = true;
   g_profile_logged_for_sig = false;
   memset(g_axis_ema_valid, 0, sizeof(g_axis_ema_valid));
   if (g_profile_mutex) xSemaphoreGive(g_profile_mutex);

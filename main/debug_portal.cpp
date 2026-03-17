@@ -17,8 +17,8 @@ static const char *TAG = "DEBUG_PORTAL";
 static char s_log_buffer[LOG_BUFFER_SIZE];
 static size_t s_log_head = 0;
 static size_t s_log_tail = 0;
-static SemaphoreHandle_t s_log_mutex = NULL;
-static vprintf_like_t s_original_vprintf = NULL;
+static SemaphoreHandle_t s_log_mutex = nullptr;
+static vprintf_like_t s_original_vprintf = nullptr;
 
 static int custom_vprintf(const char *fmt, va_list ap) {
   va_list ap_copy;
@@ -105,19 +105,19 @@ static esp_err_t portal_logs_handler(httpd_req_t *req) {
   if (s_log_mutex)
     xSemaphoreGive(s_log_mutex);
 
-  httpd_resp_send_chunk(req, NULL, 0); // End chunk
+  httpd_resp_send_chunk(req, nullptr, 0); // End chunk
   return ESP_OK;
 }
 
 static const httpd_uri_t uri_get = {.uri = "/",
                                     .method = HTTP_GET,
                                     .handler = portal_get_handler,
-                                    .user_ctx = NULL};
+                                    .user_ctx = nullptr};
 
 static const httpd_uri_t uri_logs = {.uri = "/logs",
                                      .method = HTTP_GET,
                                      .handler = portal_logs_handler,
-                                     .user_ctx = NULL};
+                                     .user_ctx = nullptr};
 
 static void wifi_init_softap(void) {
   esp_netif_init();
@@ -128,10 +128,10 @@ static void wifi_init_softap(void) {
   esp_wifi_init(&cfg);
 
   wifi_config_t wifi_config = {};
-  strcpy((char *)wifi_config.ap.ssid, "HOTAS-Debug");
+  memcpy(wifi_config.ap.ssid, "HOTAS-Debug", sizeof("HOTAS-Debug"));
   wifi_config.ap.ssid_len = strlen("HOTAS-Debug");
   wifi_config.ap.channel = 1;
-  strcpy((char *)wifi_config.ap.password, "");
+  wifi_config.ap.password[0] = '\0';
   wifi_config.ap.max_connection = 4;
   wifi_config.ap.authmode = WIFI_AUTH_OPEN;
 
@@ -159,7 +159,7 @@ void debug_portal_init(void) {
   wifi_init_softap();
 
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  httpd_handle_t server = NULL;
+  httpd_handle_t server = nullptr;
   if (httpd_start(&server, &config) == ESP_OK) {
     httpd_register_uri_handler(server, &uri_get);
     httpd_register_uri_handler(server, &uri_logs);
