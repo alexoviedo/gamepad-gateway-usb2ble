@@ -186,6 +186,16 @@ function round3(value) {
   return Math.round(value * 1000) / 1000;
 }
 
+function escapeHTML(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 function deepMerge(target, patch) {
   if (patch == null || typeof patch !== 'object' || Array.isArray(patch)) return patch;
   const out = Array.isArray(target) ? [...target] : { ...(target || {}) };
@@ -1287,11 +1297,11 @@ function renderDevices() {
     const card = document.createElement('article');
     card.className = `device-card${device.device_id === client.selectedDeviceId ? ' active' : ''}`;
     card.innerHTML = `
-      <h3>${device.role || 'unknown'} · device ${device.device_id}</h3>
-      <p>Address ${device.dev_addr} · ${device.num_elements} elements · descriptor ${device.report_desc_len} bytes</p>
+      <h3>${escapeHTML(device.role || 'unknown')} · device ${escapeHTML(device.device_id)}</h3>
+      <p>Address ${escapeHTML(device.dev_addr)} · ${escapeHTML(device.num_elements)} elements · descriptor ${escapeHTML(device.report_desc_len)} bytes</p>
       <div class="device-actions">
-        <span class="pill muted">role: ${device.role || 'unknown'}</span>
-        <span class="pill muted">id: ${device.device_id}</span>
+        <span class="pill muted">role: ${escapeHTML(device.role || 'unknown')}</span>
+        <span class="pill muted">id: ${escapeHTML(device.device_id)}</span>
       </div>
     `;
     card.addEventListener('click', () => {
@@ -1320,10 +1330,10 @@ function renderDescriptor() {
 
   const metaCount = metadata ? metadata.size : 0;
   elements.descriptorMeta.innerHTML = `
-    <strong>Device ${device.device_id}</strong> · role <strong>${device.role}</strong> ·
-    <span>${device.num_elements} elements</span> ·
-    <span>metadata ${metaCount}</span> ·
-    <span>descriptor ${device.report_desc_len} bytes</span>
+    <strong>Device ${escapeHTML(device.device_id)}</strong> · role <strong>${escapeHTML(device.role)}</strong> ·
+    <span>${escapeHTML(device.num_elements)} elements</span> ·
+    <span>metadata ${escapeHTML(metaCount)}</span> ·
+    <span>descriptor ${escapeHTML(device.report_desc_len)} bytes</span>
   `;
 
   if (!bytes) {
@@ -1372,11 +1382,11 @@ function renderTelemetry() {
     row.className = 'telemetry-row';
     row.innerHTML = `
       <div>
-        <div>${sample.meta ? describeElement(sample.meta) : `device ${sample.deviceId} · element ${sample.elementId}`}</div>
-        <div class="muted">device ${sample.deviceId}</div>
+        <div>${sample.meta ? escapeHTML(describeElement(sample.meta)) : `device ${escapeHTML(sample.deviceId)} · element ${escapeHTML(sample.elementId)}`}</div>
+        <div class="muted">device ${escapeHTML(sample.deviceId)}</div>
       </div>
       <div>
-        <div>${sample.raw}</div>
+        <div>${escapeHTML(sample.raw)}</div>
         <div class="muted">raw</div>
       </div>
       <div>
@@ -1418,13 +1428,13 @@ function renderWizard() {
 
   const meta = wizard.candidate.meta;
   elements.wizardDetected.innerHTML = `
-    <strong>${describeElement(meta)}</strong>
-    <span class="muted-line">Device ${wizard.candidate.deviceId} · score ${wizard.candidate.weightedScore?.toFixed(2) || wizard.candidate.score.toFixed(2)}</span>
+    <strong>${escapeHTML(describeElement(meta))}</strong>
+    <span class="muted-line">Device ${escapeHTML(wizard.candidate.deviceId)} · score ${escapeHTML(wizard.candidate.weightedScore?.toFixed(2) || wizard.candidate.score.toFixed(2))}</span>
   `;
   elements.wizardPreview.innerHTML = `
-    <div class="preview-stat"><span>Active samples</span><strong>${wizard.candidate.activeCount}</strong></div>
-    <div class="preview-stat"><span>Total delta</span><strong>${wizard.candidate.totalDelta.toFixed(3)}</strong></div>
-    <div class="preview-stat"><span>Peak magnitude</span><strong>${wizard.candidate.maxMagnitude.toFixed(3)}</strong></div>
+    <div class="preview-stat"><span>Active samples</span><strong>${escapeHTML(wizard.candidate.activeCount)}</strong></div>
+    <div class="preview-stat"><span>Total delta</span><strong>${escapeHTML(wizard.candidate.totalDelta.toFixed(3))}</strong></div>
+    <div class="preview-stat"><span>Peak magnitude</span><strong>${escapeHTML(wizard.candidate.maxMagnitude.toFixed(3))}</strong></div>
   `;
 }
 
@@ -1441,14 +1451,14 @@ function renderMappings() {
     let value = '<span class="muted-line">Unmapped · use the wizard above to assign a source.</span>';
     if (mapping?.configured && mapping.device_id && mapping.element_id != null) {
       const meta = client.getElementMeta(mapping.device_id, mapping.element_id);
-      const desc = meta ? describeElement(meta) : `device ${mapping.device_id} · element ${mapping.element_id}`;
-      value = `<strong>${desc}</strong><span class="muted-line">inner=${mapping.deadzone.inner.toFixed(3)} · outer=${mapping.deadzone.outer.toFixed(3)} · ema=${mapping.smoothing_alpha.toFixed(2)}</span>`;
+      const desc = meta ? escapeHTML(describeElement(meta)) : `device ${escapeHTML(mapping.device_id)} · element ${escapeHTML(mapping.element_id)}`;
+      value = `<strong>${desc}</strong><span class="muted-line">inner=${escapeHTML(mapping.deadzone.inner.toFixed(3))} · outer=${escapeHTML(mapping.deadzone.outer.toFixed(3))} · ema=${escapeHTML(mapping.smoothing_alpha.toFixed(2))}</span>`;
     }
 
     row.innerHTML = `
       <div>
-        <div class="mapping-name">${target.label}</div>
-        <div class="mapping-key">${target.key}</div>
+        <div class="mapping-name">${escapeHTML(target.label)}</div>
+        <div class="mapping-key">${escapeHTML(target.key)}</div>
       </div>
       <div class="mapping-value">${value}</div>
     `;

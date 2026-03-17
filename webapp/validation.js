@@ -95,6 +95,16 @@ function round3(value) {
   return Math.round(value * 1000) / 1000;
 }
 
+function escapeHTML(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -754,7 +764,7 @@ function computeMappedOutputs() {
 }
 
 function sampleSourceLabel(sample) {
-  return sample ? `${sample.deviceId}:${sample.elementId}` : '—';
+  return sample ? escapeHTML(`${sample.deviceId}:${sample.elementId}`) : '—';
 }
 
 function isRecentUpdate(state) {
@@ -785,8 +795,8 @@ function renderTelemetry() {
     card.innerHTML = `
       <div class="summary-card-top">
         <div class="summary-card-title">
-          <strong>${output.label}</strong>
-          <span>${output.key.toUpperCase()} output</span>
+          <strong>${escapeHTML(output.label)}</strong>
+          <span>${escapeHTML(output.key.toUpperCase())} output</span>
         </div>
         <span class="summary-state">${state.configured ? 'Mapped' : 'Unmapped'}</span>
       </div>
@@ -795,8 +805,8 @@ function renderTelemetry() {
         <div class="summary-thumb" style="left:${thumb};"></div>
       </div>
       <div class="summary-meta">
-        <span>Output<strong>${round3(state.smoothed ?? 0)}</strong></span>
-        <span>Curve<strong>${round3(state.curved ?? 0)}</strong></span>
+        <span>Output<strong>${escapeHTML(round3(state.smoothed ?? 0))}</strong></span>
+        <span>Curve<strong>${escapeHTML(round3(state.curved ?? 0))}</strong></span>
         <span>Source<em>${sampleSourceLabel(state.sample)}</em></span>
       </div>
     `;
@@ -810,10 +820,10 @@ function createInstrumentCard({ title, subtitle, stateLabel, active, primary = f
   card.innerHTML = `
     <div class="instrument-header">
       <div class="instrument-title">
-        <strong>${title}</strong>
-        <span>${subtitle}</span>
+        <strong>${escapeHTML(title)}</strong>
+        <span>${escapeHTML(subtitle)}</span>
       </div>
-      <span class="instrument-state">${stateLabel}</span>
+      <span class="instrument-state">${escapeHTML(stateLabel)}</span>
     </div>
   `;
   return card;
@@ -868,11 +878,11 @@ function createStickInstrument() {
   values.className = 'xy-values';
   values.innerHTML = `
     <div class="instrument-stats two-col">
-      <span>Aileron<strong>${round3(xState.smoothed ?? 0)}</strong></span>
+      <span>Aileron<strong>${escapeHTML(round3(xState.smoothed ?? 0))}</strong></span>
       <span>Source<em>${sampleSourceLabel(xState.sample)}</em></span>
     </div>
     <div class="instrument-stats two-col">
-      <span>Elevator<strong>${round3(yState.smoothed ?? 0)}</strong></span>
+      <span>Elevator<strong>${escapeHTML(round3(yState.smoothed ?? 0))}</strong></span>
       <span>Source<em>${sampleSourceLabel(yState.sample)}</em></span>
     </div>
   `;
@@ -904,9 +914,9 @@ function createPedalsInstrument() {
   rudderGauge.innerHTML = `
     ${buildAxisTrackMarkup(rudder)}
     <div class="instrument-stats three-col">
-      <span>Raw<strong>${round3(rudder.raw ?? 0)}</strong></span>
-      <span>Curved<strong>${round3(rudder.curved ?? 0)}</strong></span>
-      <span>Smoothed<strong>${round3(rudder.smoothed ?? 0)}</strong></span>
+      <span>Raw<strong>${escapeHTML(round3(rudder.raw ?? 0))}</strong></span>
+      <span>Curved<strong>${escapeHTML(round3(rudder.curved ?? 0))}</strong></span>
+      <span>Smoothed<strong>${escapeHTML(round3(rudder.smoothed ?? 0))}</strong></span>
     </div>
   `;
   body.appendChild(rudderGauge);
@@ -921,12 +931,12 @@ function createPedalsInstrument() {
     const brakeCard = document.createElement('div');
     brakeCard.className = 'brake-card';
     brakeCard.innerHTML = `
-      <label>${item.label}</label>
+      <label>${escapeHTML(item.label)}</label>
       <div class="brake-track">
         <div class="brake-fill" style="transform:scaleX(${normalized});"></div>
       </div>
       <div class="brake-scale">
-        <span>0</span><span>${round3(item.state.smoothed ?? 0)}</span><span>1</span>
+        <span>0</span><span>${escapeHTML(round3(item.state.smoothed ?? 0))}</span><span>1</span>
       </div>
     `;
     brakes.appendChild(brakeCard);
@@ -962,13 +972,13 @@ function createThrottleInstrument() {
     <div class="meter-card">
       ${buildAxisTrackMarkup(state, { slider: true })}
       <div class="instrument-stats three-col">
-        <span>Raw<strong>${round3(state.raw ?? 0)}</strong></span>
-        <span>Curved<strong>${round3(state.curved ?? 0)}</strong></span>
-        <span>Smoothed<strong>${round3(state.smoothed ?? 0)}</strong></span>
+        <span>Raw<strong>${escapeHTML(round3(state.raw ?? 0))}</strong></span>
+        <span>Curved<strong>${escapeHTML(round3(state.curved ?? 0))}</strong></span>
+        <span>Smoothed<strong>${escapeHTML(round3(state.smoothed ?? 0))}</strong></span>
       </div>
     </div>
     <div class="instrument-meta two-col">
-      <span>Output<strong>${round3(state.smoothed ?? 0)}</strong></span>
+      <span>Output<strong>${escapeHTML(round3(state.smoothed ?? 0))}</strong></span>
       <span>Source<em>${sampleSourceLabel(state.sample)}</em></span>
     </div>
   `;
@@ -994,7 +1004,7 @@ function createCompactAxisInstrument(outputKey) {
     <div class="meter-card">
       ${buildAxisTrackMarkup(state, { slider })}
       <div class="instrument-stats two-col">
-        <span>Output<strong>${round3(state.smoothed ?? 0)}</strong></span>
+        <span>Output<strong>${escapeHTML(round3(state.smoothed ?? 0))}</strong></span>
         <span>Source<em>${sampleSourceLabel(state.sample)}</em></span>
       </div>
     </div>
@@ -1030,7 +1040,7 @@ function createHatInstrument() {
   const stats = document.createElement('div');
   stats.className = 'instrument-stats two-col';
   stats.innerHTML = `
-    <span>State<strong>${Math.round(state.smoothed || 0)}</strong></span>
+    <span>State<strong>${escapeHTML(Math.round(state.smoothed || 0))}</strong></span>
     <span>Source<em>${sampleSourceLabel(state.sample)}</em></span>
   `;
   body.appendChild(stats);
