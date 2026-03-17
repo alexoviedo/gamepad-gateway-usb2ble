@@ -1394,31 +1394,31 @@ function renderTelemetry() {
   }
 
   elements.telemetryList.className = 'telemetry-list';
-  elements.telemetryList.innerHTML = '';
+  let rowsHtml = '';
 
   for (const sample of history.slice(0, 24)) {
-    const row = document.createElement('div');
-    row.className = 'telemetry-row';
-    row.innerHTML = `
-      <div>
-        <div>${sample.meta ? escapeHTML(describeElement(sample.meta)) : `device ${escapeHTML(sample.deviceId)} · element ${escapeHTML(sample.elementId)}`}</div>
-        <div class="muted">device ${escapeHTML(sample.deviceId)}</div>
-      </div>
-      <div>
-        <div>${escapeHTML(sample.raw)}</div>
-        <div class="muted">raw</div>
-      </div>
-      <div>
-        <div>${formatQ15(sample.normQ15)}</div>
-        <div class="muted">normalized</div>
-      </div>
-      <div>
-        <div>${sample.receivedAt.toLocaleTimeString()}</div>
-        <div class="muted">updated</div>
+    rowsHtml += `
+      <div class="telemetry-row">
+        <div>
+          <div>${sample.meta ? escapeHTML(describeElement(sample.meta)) : `device ${escapeHTML(sample.deviceId)} · element ${escapeHTML(sample.elementId)}`}</div>
+          <div class="muted">device ${escapeHTML(sample.deviceId)}</div>
+        </div>
+        <div>
+          <div>${escapeHTML(sample.raw)}</div>
+          <div class="muted">raw</div>
+        </div>
+        <div>
+          <div>${formatQ15(sample.normQ15)}</div>
+          <div class="muted">normalized</div>
+        </div>
+        <div>
+          <div>${sample.receivedAt.toLocaleTimeString()}</div>
+          <div class="muted">updated</div>
+        </div>
       </div>
     `;
-    elements.telemetryList.appendChild(row);
   }
+  elements.telemetryList.innerHTML = rowsHtml;
 }
 
 function renderWizard() {
