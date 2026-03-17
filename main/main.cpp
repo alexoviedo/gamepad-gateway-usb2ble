@@ -30,30 +30,9 @@
 //   * remap sliders to different axes
 //
 // Keep this function fast and non-blocking.
-[[maybe_unused]] static inline int16_t apply_deadzone(int16_t v, int16_t dz) {
-  if (v > -dz && v < dz)
-    return 0;
-  return v;
-}
-
 static void translate_usb_to_ble(const GamepadState *in, GamepadState *out) {
   // Start with an identity mapping.
   *out = *in;
-
-  // Example tweaks (uncomment if desired):
-  //
-  // 1) Invert Y axis (many sticks are "up is negative")
-  // out->y = (int16_t)(-out->y);
-  //
-  // 2) Apply deadzone to stick axes
-  // const int16_t DZ = 800; // ~2.4% of full scale
-  // out->x = apply_deadzone(out->x, DZ);
-  // out->y = apply_deadzone(out->y, DZ);
-  //
-  // 3) Swap rudder (Z) and twist (Rz)
-  // int16_t tmp = out->z;
-  // out->z = out->rz;
-  // out->rz = tmp;
 }
 
 extern "C" void app_main() {
