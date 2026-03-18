@@ -33,11 +33,13 @@ jobs:
               - 'idf_component.yml'
               - 'dependencies.lock'
               - 'sdkconfig.defaults'
+              - '.github/workflows/ci.yml'
             webapp:
               - 'webapp/**'
               - 'package.json'
               - 'package-lock.json'
               - 'tsconfig.web.json'
+              - '.github/workflows/ci.yml'
 
   build-firmware:
     needs: detect-changes
@@ -51,9 +53,10 @@ jobs:
     - name: esp-idf build
       uses: espressif/esp-idf-ci-action@v1
       with:
-        esp_idf_version: v5.3
+        esp_idf_version: v5.4
         target: esp32s3
         path: '.'
+        command: 'idf.py build'
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -62,8 +65,8 @@ jobs:
         path: |
           build/bootloader/bootloader.bin
           build/partition_table/partition-table.bin
-          build/gamepad-gateway-usb2ble.bin
-          build/gamepad-gateway-usb2ble.elf
+          build/hotas_ble.bin
+          build/hotas_ble.elf
           build/flasher_args.json
 
   build-webapp:

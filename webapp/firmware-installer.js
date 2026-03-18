@@ -5,16 +5,10 @@ const HOTAS_FIRMWARE_FEEDS = {
 
 const HOTAS_FLASHER_SCRIPT = 'https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module';
 
-/**
- * @param {any} error
- */
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * @param {any} str
- */
 function escapeHTML(str) {
   if (str == null) return '';
   return String(str)
@@ -34,17 +28,11 @@ function firmwareFeatureSupport() {
   };
 }
 
-/**
- * @param {any} value
- */
 function shortenHash(value, keep = 10) {
   if (!value || typeof value !== 'string') return '—';
   return value.length > keep ? `${value.slice(0, keep)}…` : value;
 }
 
-/**
- * @param {any} value
- */
 function formatDate(value) {
   if (!value) return '—';
   const date = new Date(value);
@@ -52,9 +40,6 @@ function formatDate(value) {
   return date.toLocaleString();
 }
 
-/**
- * @param {any} value
- */
 function absoluteUrl(value, base = window.location.href) {
   try {
     return new URL(value, base).toString();
@@ -63,9 +48,6 @@ function absoluteUrl(value, base = window.location.href) {
   }
 }
 
-/**
- * @param {any} url
- */
 async function fetchJson(url) {
   const response = await fetch(url, { cache: 'no-store' });
   if (!response.ok) {
@@ -90,10 +72,6 @@ async function ensureEspWebToolsLoaded() {
   return window.__hotasEspWebToolsPromise;
 }
 
-/**
- * @param {any} target
- * @param {any} manifestUrl
- */
 function renderInstallButton(target, manifestUrl) {
   if (!target) return;
   target.innerHTML = '';
@@ -103,9 +81,6 @@ function renderInstallButton(target, manifestUrl) {
   target.appendChild(install);
 }
 
-/**
- * @param {any} manifestUrl
- */
 async function validateManifestUrl(manifestUrl) {
   const manifest = await fetchJson(manifestUrl);
   if (!manifest || typeof manifest !== 'object') {
@@ -121,19 +96,11 @@ async function validateManifestUrl(manifestUrl) {
   return manifest;
 }
 
-/**
- * @param {any} id
- * @param {any} value
- */
 function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
 }
 
-/**
- * @param {any} id
- * @param {any} value
- */
 function setHref(id, value, labelFallback = 'Open') {
   const el = document.getElementById(id);
   if (!el) return;
@@ -146,10 +113,6 @@ function setHref(id, value, labelFallback = 'Open') {
   }
 }
 
-/**
- * @param {any} id
- * @param {any} text
- */
 function setStatusPill(id, text, tone = 'muted') {
   const el = document.getElementById(id);
   if (!el) return;
@@ -157,11 +120,6 @@ function setStatusPill(id, text, tone = 'muted') {
   el.className = `pill ${tone}`;
 }
 
-/**
- * @param {any} container
- * @param {any} meta
- * @param {any} assetBaseUrl
- */
 function buildDownloadsList(container, meta, assetBaseUrl) {
   if (!container) return;
   const artifacts = meta?.artifacts || {};
@@ -192,9 +150,6 @@ function buildDownloadsList(container, meta, assetBaseUrl) {
   }
 }
 
-/**
- * @param {any} support
- */
 function buildCompatCopy(support) {
   if (!support.secure) {
     return {
@@ -214,10 +169,6 @@ function buildCompatCopy(support) {
   };
 }
 
-/**
- * @param {any} meta
- * @param {any} metaUrl
- */
 function normalizeManifestMeta(meta, metaUrl) {
   if (!meta || typeof meta !== 'object') return null;
   return {
@@ -227,19 +178,12 @@ function normalizeManifestMeta(meta, metaUrl) {
   };
 }
 
-/**
- * @param {any} url
- */
 async function loadFirmwareFeed(url) {
   const feedUrl = absoluteUrl(url, window.location.href);
   const raw = await fetchJson(feedUrl);
   return normalizeManifestMeta(raw, feedUrl);
 }
 
-/**
- * @param {any} meta
- * @param {any} sourceUrl
- */
 async function hydrateFirmwareUi(meta, sourceUrl) {
   const support = firmwareFeatureSupport();
   const compat = buildCompatCopy(support);
@@ -304,9 +248,6 @@ async function hydrateFirmwareUi(meta, sourceUrl) {
   }
 }
 
-/**
- * @param {any} url
- */
 async function loadFeedIntoUi(url) {
   setStatusPill('firmwareFeedPill', 'Loading feed', 'muted');
   try {
@@ -325,9 +266,6 @@ async function loadFeedIntoUi(url) {
   }
 }
 
-/**
- * @param {any} manifestUrl
- */
 async function loadCustomManifest(manifestUrl) {
   if (!manifestUrl) throw new Error('Enter a manifest URL first.');
   setStatusPill('firmwareManifestPill', 'Loading manifest', 'muted');

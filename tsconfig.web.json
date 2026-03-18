@@ -12,7 +12,7 @@
       "DOM"
     ],
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": []
   },
   "include": [
     "webapp/**/*.js",

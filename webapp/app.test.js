@@ -2,26 +2,12 @@ import { HotasConfigClient, showError } from './app.js';
 
 // Minimal mock for DataView
 global.DataView = global.DataView || class {
-/**
- * @param {any} buffer
- */
   constructor(buffer) { this.buffer = buffer; }
-/**
- * @param {any} offset
- */
   getUint8(offset) { return new Uint8Array(this.buffer)[offset]; }
-/**
- * @param {any} offset
- * @param {any} littleEndian
- */
   getUint16(offset, littleEndian) {
     const view = new Uint8Array(this.buffer);
     return littleEndian ? view[offset] | (view[offset+1] << 8) : (view[offset] << 8) | view[offset+1];
   }
-/**
- * @param {any} offset
- * @param {any} littleEndian
- */
   getUint32(offset, littleEndian) {
     const view = new Uint8Array(this.buffer);
     if (littleEndian) {
@@ -33,15 +19,9 @@ global.DataView = global.DataView || class {
 
 // Mock TextDecoder/Encoder
 global.TextDecoder = class {
-/**
- * @param {any} bytes
- */
   decode(bytes) { return String.fromCharCode(...bytes); }
 };
 global.TextEncoder = class {
-/**
- * @param {any} str
- */
   encode(str) { return new Uint8Array([...str].map(c => c.charCodeAt(0))); }
 };
 
@@ -49,10 +29,6 @@ global.TextEncoder = class {
 let passed = 0;
 let failed = 0;
 
-/**
- * @param {any} condition
- * @param {any} message
- */
 function assert(condition, message) {
   if (!condition) {
     console.error('FAIL:', message);
@@ -106,9 +82,6 @@ async function runTests() {
     });
 
     client.pendingJson.set(123, {
-/**
- * @param {any} payload
- */
       resolve: (payload) => {
         assert(payload.rid === 123, 'handleEvtNotification should resolve pending JSON');
       },

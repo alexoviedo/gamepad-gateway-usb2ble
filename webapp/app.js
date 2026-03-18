@@ -53,64 +53,64 @@ const tuningState = {
 };
 
 const elements = (typeof document !== 'undefined') ? {
-  connectBtn: /** @type {HTMLButtonElement} */ (document.getElementById('connectBtn')),
-  reconnectBtn: /** @type {HTMLButtonElement} */ (document.getElementById('reconnectBtn')),
-  disconnectBtn: /** @type {HTMLButtonElement} */ (document.getElementById('disconnectBtn')),
-  refreshDevicesBtn: /** @type {HTMLButtonElement} */ (document.getElementById('refreshDevicesBtn')),
-  readConfigBtn: /** @type {HTMLButtonElement} */ (document.getElementById('readConfigBtn')),
-  saveProfileBtn: /** @type {HTMLButtonElement} */ (document.getElementById('saveProfileBtn')),
-  rebootRunBtn: /** @type {HTMLButtonElement} */ (document.getElementById('rebootRunBtn')),
-  exportProfileBtn: /** @type {HTMLButtonElement} */ (document.getElementById('exportProfileBtn')),
-  importProfileBtn: /** @type {HTMLButtonElement} */ (document.getElementById('importProfileBtn')),
-  importProfileInput: /** @type {HTMLInputElement} */ (document.getElementById('importProfileInput')),
-  resetProfileBtn: /** @type {HTMLButtonElement} */ (document.getElementById('resetProfileBtn')),
-  startStreamBtn: /** @type {HTMLButtonElement} */ (document.getElementById('startStreamBtn')),
-  stopStreamBtn: /** @type {HTMLButtonElement} */ (document.getElementById('stopStreamBtn')),
-  loadDescriptorBtn: /** @type {HTMLButtonElement} */ (document.getElementById('loadDescriptorBtn')),
-  copyDescriptorBtn: /** @type {HTMLButtonElement} */ (document.getElementById('copyDescriptorBtn')),
-  downloadDescriptorBtn: /** @type {HTMLButtonElement} */ (document.getElementById('downloadDescriptorBtn')),
-  clearLogBtn: /** @type {HTMLButtonElement} */ (document.getElementById('clearLogBtn')),
-  connBadge: /** @type {HTMLElement} */ (document.getElementById('connBadge')),
-  streamBadge: /** @type {HTMLElement} */ (document.getElementById('streamBadge')),
-  configBadge: /** @type {HTMLElement} */ (document.getElementById('configBadge')),
-  sampleRateBadge: /** @type {HTMLElement} */ (document.getElementById('sampleRateBadge')),
-  deviceName: /** @type {HTMLElement} */ (document.getElementById('deviceName')),
-  gattState: /** @type {HTMLElement} */ (document.getElementById('gattState')),
-  evtState: /** @type {HTMLElement} */ (document.getElementById('evtState')),
-  streamState: /** @type {HTMLElement} */ (document.getElementById('streamState')),
-  deviceCount: /** @type {HTMLElement} */ (document.getElementById('deviceCount')),
-  deviceList: /** @type {HTMLElement} */ (document.getElementById('deviceList')),
-  descriptorMeta: /** @type {HTMLElement} */ (document.getElementById('descriptorMeta')),
-  descriptorHex: /** @type {HTMLElement} */ (document.getElementById('descriptorHex')),
-  telemetryList: /** @type {HTMLElement} */ (document.getElementById('telemetryList')),
-  latestSample: /** @type {HTMLElement} */ (document.getElementById('latestSample')),
-  logPanel: /** @type {HTMLElement} */ (document.getElementById('logPanel')),
-  errorBanner: /** @type {HTMLElement} */ (document.getElementById('errorBanner')),
-  serviceUuidText: /** @type {HTMLElement} */ (document.getElementById('serviceUuidText')),
-  targetSelect: /** @type {HTMLSelectElement} */ (document.getElementById('targetSelect')),
-  wizardStartBtn: /** @type {HTMLButtonElement} */ (document.getElementById('wizardStartBtn')),
-  wizardConfirmBtn: /** @type {HTMLButtonElement} */ (document.getElementById('wizardConfirmBtn')),
-  wizardRetryBtn: /** @type {HTMLButtonElement} */ (document.getElementById('wizardRetryBtn')),
-  wizardProgressFill: /** @type {HTMLElement} */ (document.getElementById('wizardProgressFill')),
-  wizardPrompt: /** @type {HTMLElement} */ (document.getElementById('wizardPrompt')),
-  wizardStatus: /** @type {HTMLElement} */ (document.getElementById('wizardStatus')),
-  wizardDetected: /** @type {HTMLElement} */ (document.getElementById('wizardDetected')),
-  wizardPreview: /** @type {HTMLElement} */ (document.getElementById('wizardPreview')),
-  mappingList: /** @type {HTMLElement} */ (document.getElementById('mappingList')),
-  tuneAxisSelect: /** @type {HTMLSelectElement} */ (document.getElementById('tuneAxisSelect')),
-  resetModifiersBtn: /** @type {HTMLButtonElement} */ (document.getElementById('resetModifiersBtn')),
-  deadzoneInnerRange: /** @type {HTMLInputElement} */ (document.getElementById('deadzoneInnerRange')),
-  deadzoneInnerInput: /** @type {HTMLInputElement} */ (document.getElementById('deadzoneInnerInput')),
-  outerClampRange: /** @type {HTMLInputElement} */ (document.getElementById('outerClampRange')),
-  outerClampInput: /** @type {HTMLInputElement} */ (document.getElementById('outerClampInput')),
-  smoothingRange: /** @type {HTMLInputElement} */ (document.getElementById('smoothingRange')),
-  smoothingInput: /** @type {HTMLInputElement} */ (document.getElementById('smoothingInput')),
-  curveSvg: /** @type {HTMLElement} */ (document.getElementById('curveSvg')),
-  curveStatus: /** @type {HTMLElement} */ (document.getElementById('curveStatus')),
-  previewRaw: /** @type {HTMLElement} */ (document.getElementById('previewRaw')),
-  previewDeadzoned: /** @type {HTMLElement} */ (document.getElementById('previewDeadzoned')),
-  previewCurved: /** @type {HTMLElement} */ (document.getElementById('previewCurved')),
-  previewSmoothed: /** @type {HTMLElement} */ (document.getElementById('previewSmoothed')),
+  connectBtn: document.getElementById('connectBtn'),
+  reconnectBtn: document.getElementById('reconnectBtn'),
+  disconnectBtn: document.getElementById('disconnectBtn'),
+  refreshDevicesBtn: document.getElementById('refreshDevicesBtn'),
+  readConfigBtn: document.getElementById('readConfigBtn'),
+  saveProfileBtn: document.getElementById('saveProfileBtn'),
+  rebootRunBtn: document.getElementById('rebootRunBtn'),
+  exportProfileBtn: document.getElementById('exportProfileBtn'),
+  importProfileBtn: document.getElementById('importProfileBtn'),
+  importProfileInput: document.getElementById('importProfileInput'),
+  resetProfileBtn: document.getElementById('resetProfileBtn'),
+  startStreamBtn: document.getElementById('startStreamBtn'),
+  stopStreamBtn: document.getElementById('stopStreamBtn'),
+  loadDescriptorBtn: document.getElementById('loadDescriptorBtn'),
+  copyDescriptorBtn: document.getElementById('copyDescriptorBtn'),
+  downloadDescriptorBtn: document.getElementById('downloadDescriptorBtn'),
+  clearLogBtn: document.getElementById('clearLogBtn'),
+  connBadge: document.getElementById('connBadge'),
+  streamBadge: document.getElementById('streamBadge'),
+  configBadge: document.getElementById('configBadge'),
+  sampleRateBadge: document.getElementById('sampleRateBadge'),
+  deviceName: document.getElementById('deviceName'),
+  gattState: document.getElementById('gattState'),
+  evtState: document.getElementById('evtState'),
+  streamState: document.getElementById('streamState'),
+  deviceCount: document.getElementById('deviceCount'),
+  deviceList: document.getElementById('deviceList'),
+  descriptorMeta: document.getElementById('descriptorMeta'),
+  descriptorHex: document.getElementById('descriptorHex'),
+  telemetryList: document.getElementById('telemetryList'),
+  latestSample: document.getElementById('latestSample'),
+  logPanel: document.getElementById('logPanel'),
+  errorBanner: document.getElementById('errorBanner'),
+  serviceUuidText: document.getElementById('serviceUuidText'),
+  targetSelect: document.getElementById('targetSelect'),
+  wizardStartBtn: document.getElementById('wizardStartBtn'),
+  wizardConfirmBtn: document.getElementById('wizardConfirmBtn'),
+  wizardRetryBtn: document.getElementById('wizardRetryBtn'),
+  wizardProgressFill: document.getElementById('wizardProgressFill'),
+  wizardPrompt: document.getElementById('wizardPrompt'),
+  wizardStatus: document.getElementById('wizardStatus'),
+  wizardDetected: document.getElementById('wizardDetected'),
+  wizardPreview: document.getElementById('wizardPreview'),
+  mappingList: document.getElementById('mappingList'),
+  tuneAxisSelect: document.getElementById('tuneAxisSelect'),
+  resetModifiersBtn: document.getElementById('resetModifiersBtn'),
+  deadzoneInnerRange: document.getElementById('deadzoneInnerRange'),
+  deadzoneInnerInput: document.getElementById('deadzoneInnerInput'),
+  outerClampRange: document.getElementById('outerClampRange'),
+  outerClampInput: document.getElementById('outerClampInput'),
+  smoothingRange: document.getElementById('smoothingRange'),
+  smoothingInput: document.getElementById('smoothingInput'),
+  curveSvg: document.getElementById('curveSvg'),
+  curveStatus: document.getElementById('curveStatus'),
+  previewRaw: document.getElementById('previewRaw'),
+  previewDeadzoned: document.getElementById('previewDeadzoned'),
+  previewCurved: document.getElementById('previewCurved'),
+  previewSmoothed: document.getElementById('previewSmoothed'),
 } : {};
 
 if (typeof document !== 'undefined') {
@@ -1570,10 +1570,6 @@ export function render() {
   renderTuningPanel();
 }
 
-/**
- * @param {any} action
- * @param {any} fallbackMessage
- */
 async function guarded(action, fallbackMessage) {
   clearError();
   try {
@@ -1738,9 +1734,6 @@ elements.tuneAxisSelect.addEventListener('change', () => {
 });
 
 elements.resetModifiersBtn.addEventListener('click', () => {
-/**
- * @param {any} next
- */
   updateSelectedAxisConfig((next) => {
     next.deadzone = { inner: 0, outer: 0 };
     next.smoothing_alpha = 0;
