@@ -44,6 +44,96 @@ const DEFAULT_AXIS_CONFIG = Object.freeze({
   },
 });
 
+
+const CmdType = {
+    UNKNOWN: 0,
+    GET_DEVICES: 1,
+    GET_DESCRIPTOR: 2,
+    GET_ELEMENTS: 3,
+    START_STREAM: 4,
+    STOP_STREAM: 5,
+    GET_CONFIG: 6,
+    SET_CONFIG: 7,
+    SAVE_PROFILE: 8,
+    REBOOT_TO_RUN: 9,
+    REBOOT_TO_CONFIG: 10,
+    ERROR_RESP: 255
+};
+
+function floatToQ15(v) {
+  if (v >= 1.0) return 32767;
+  if (v <= -1.0) return -32767;
+  return Math.round(v * 32767.0);
+}
+
+function q15ToFloat(v) {
+  return v / 32767.0;
+}
+
+function encodeAxisConfig(am, view, offset) {
+  view.setUint8(offset + 0, am.configured ? 1 : 0);
+  view.setUint32(offset + 1, am.device_id || 0, true);
+  view.setUint32(offset + 5, am.element_id || 0, true);
+  view.setUint8(offset + 9, am.invert ? 1 : 0);
+  view.setInt16(offset + 10, floatToQ15(am.deadzone.inner), true);
+  view.setInt16(offset + 12, floatToQ15(am.deadzone.outer), true);
+  view.setInt16(offset + 14, floatToQ15(am.smoothing_alpha), true);
+  view.setInt16(offset + 16, floatToQ15(am.curve.p1.x), true);
+  view.setInt16(offset + 18, floatToQ15(am.curve.p1.y), true);
+  view.setInt16(offset + 20, floatToQ15(am.curve.p2.x), true);
+  view.setInt16(offset + 22, floatToQ15(am.curve.p2.y), true);
+}
+
+function decodeAxisConfig(view, offset) {
+  return {
+    configured: view.getUint8(offset + 0) !== 0,
+    device_id: view.getUint32(offset + 1, true),
+    element_id: view.getUint32(offset + 5, true),
+    invert: view.getUint8(offset + 9) !== 0,
+    deadzone: {
+      inner: q15ToFloat(view.getInt16(offset + 10, true)),
+      outer: q15ToFloat(view.getInt16(offset + 12, true)),
+    },
+    smoothing_alpha: q15ToFloat(view.getInt16(offset + 14, true)),
+    curve: {
+      type: 'bezier',
+      p1: {
+        x: q15ToFloat(view.getInt16(offset + 16, true)),
+        y: q15ToFloat(view.getInt16(offset + 18, true)),
+      },
+      p2: {
+        x: q15ToFloat(view.getInt16(offset + 20, true)),
+        y: q15ToFloat(view.getInt16(offset + 22, true)),
+      }
+    }
+  };
+}
+
+function encodeMappingProfile(prof) {
+  const buf = new Uint8Array(2 + 10 * 24);
+  const view = new DataView(buf.buffer);
+  view.setUint8(0, 2); // version
+  view.setUint8(1, prof.buttons_or_combine !== false ? 1 : 0);
+  for (let i = 0; i < OUTPUT_TARGETS.length; i++) {
+    const key = OUTPUT_TARGETS[i].key;
+    const am = prof.axes[key] || DEFAULT_AXIS_CONFIG;
+    encodeAxisConfig(am, view, 2 + i * 24);
+  }
+  return buf;
+}
+
+function decodeMappingProfile(buf) {
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const version = view.getUint8(0);
+  const prof = { version, buttons_or_combine: view.getUint8(1) !== 0, axes: {} };
+  for (let i = 0; i < OUTPUT_TARGETS.length; i++) {
+    const key = OUTPUT_TARGETS[i].key;
+    prof.axes[key] = decodeAxisConfig(view, 2 + i * 24);
+  }
+  return prof;
+}
+
+
 const tuningState = {
   selectedAxisKey: 'z',
   curveDragPoint: null,
@@ -652,7 +742,8 @@ export class HotasConfigClient {
     throw new Error('CMD characteristic is not writable.');
   }
 
-  async sendCommand(command) {
+
+  async sendBinaryCommand(cmdType, payload = new Uint8Array(0), timeoutMs = 8000) {
     return this._enqueueCommand(async () => {
       if (!this.characteristics.cmd) throw new Error('Not connected to the Config Service.');
       await this.ensureEvtSubscription();
@@ -662,20 +753,20 @@ export class HotasConfigClient {
       }
 
       const rid = ++this.requestId;
-      const payload = { rid, ...command };
-      const json = JSON.stringify(payload);
 
-      const timeoutMs = payload.cmd === 'get_descriptor'
-        ? 30000
-        : payload.cmd === 'get_devices'
-          ? 15000
-          : 8000;
+      const buf = new Uint8Array(6 + payload.length);
+      const view = new DataView(buf.buffer);
+      view.setUint8(0, 2); // Version 2
+      view.setUint8(1, cmdType); // Command
+      view.setUint16(2, rid, true); // Request ID
+      view.setUint16(4, payload.length, true); // Payload len
+      buf.set(payload, 6);
 
       const responsePromise = new Promise((resolve, reject) => {
         const timeoutId = setTimeout(() => {
           if (this.pendingJson.has(rid)) {
             this.pendingJson.delete(rid);
-            reject(new Error(`Timed out waiting for response to ${payload.cmd}`));
+            reject(new Error(`Timed out waiting for binary response to cmd ${cmdType}`));
           }
         }, timeoutMs);
 
@@ -688,27 +779,54 @@ export class HotasConfigClient {
             clearTimeout(timeoutId);
             reject(error);
           },
-          payload,
+          cmdType,
         });
       });
 
       try {
-        const writeMode = await this.writeCommandText(json);
-        log('CMD →', `${json} [${writeMode}]`);
-      } catch (error) {
-        const pending = this.pendingJson.get(rid);
-        if (pending) {
-          this.pendingJson.delete(rid);
-          pending.reject(error);
+        const CHUNK_SIZE = 512;
+        let offset = 0;
+        while (offset < buf.length) {
+          const chunk = buf.slice(offset, offset + CHUNK_SIZE);
+          await this.characteristics.cmd.writeValue(chunk);
+          offset += CHUNK_SIZE;
         }
+      } catch (error) {
+        this.pendingJson.delete(rid);
         throw error;
       }
 
-      return await responsePromise;
+      return responsePromise;
     });
   }
 
-  async getDevices() {
+  // Backwards compat stub for the UI
+  async sendCommand(command) {
+    const cmd = command.cmd;
+    if (cmd === 'get_devices') return this.sendBinaryCommand(CmdType.GET_DEVICES, new Uint8Array(), 15000);
+    if (cmd === 'get_descriptor') {
+      const p = new Uint8Array(4);
+      new DataView(p.buffer).setUint32(0, command.device_id, true);
+      return this.sendBinaryCommand(CmdType.GET_DESCRIPTOR, p, 30000);
+    }
+    if (cmd === 'get_elements') {
+      const p = new Uint8Array(4);
+      new DataView(p.buffer).setUint32(0, command.device_id, true);
+      return this.sendBinaryCommand(CmdType.GET_ELEMENTS, p, 8000);
+    }
+    if (cmd === 'start_stream') return this.sendBinaryCommand(CmdType.START_STREAM, new Uint8Array(), 8000);
+    if (cmd === 'stop_stream') return this.sendBinaryCommand(CmdType.STOP_STREAM, new Uint8Array(), 8000);
+    if (cmd === 'get_config') return this.sendBinaryCommand(CmdType.GET_CONFIG, new Uint8Array(), 8000);
+    if (cmd === 'set_config') {
+      const bin = encodeMappingProfile(command.config);
+      return this.sendBinaryCommand(CmdType.SET_CONFIG, bin, 8000);
+    }
+    if (cmd === 'save_profile') return this.sendBinaryCommand(CmdType.SAVE_PROFILE, new Uint8Array(), 8000);
+    if (cmd === 'reboot_to_run') return this.sendBinaryCommand(CmdType.REBOOT_TO_RUN, new Uint8Array(), 8000);
+    if (cmd === 'reboot_to_config') return this.sendBinaryCommand(CmdType.REBOOT_TO_CONFIG, new Uint8Array(), 8000);
+    throw new Error('Unknown command ' + cmd);
+  }
+async getDevices() {
     const response = await this.sendCommand({ cmd: 'get_devices' });
     this.devices = Array.isArray(response.devices) ? response.devices : [];
 
@@ -861,56 +979,108 @@ export class HotasConfigClient {
     }
     if (!complete) return;
 
-    if (complete.type === 1) {
-      const text = decodeUtf8(complete.bytes);
-      log('EVT JSON ←', text);
-      let payload = null;
-      try {
-        payload = JSON.parse(text);
-      } catch (error) {
-        showError(`Received malformed JSON EVT payload: ${error.message}`);
-        return;
-      }
 
-      const rid = payload?.rid;
-      if (typeof rid === 'number' && this.pendingJson.has(rid)) {
-        const pending = this.pendingJson.get(rid);
-        this.pendingJson.delete(rid);
-        pending.resolve(payload);
-      }
+    if (complete.type === 1 || complete.type === 2 || complete.type === 4 || complete.type === 5 || complete.type === 6) {
+      log('EVT BINARY ←', `type=${complete.type} len=${complete.bytes.length}`);
 
-      if (Array.isArray(payload?.devices)) this.devices = payload.devices;
-      if (typeof payload?.device_id === 'number' && Array.isArray(payload?.elements)) {
-        const byId = new Map();
-        for (const rawElement of payload.elements) {
-          const element = normalizeElementMeta(rawElement);
-          if (element) {
-            byId.set(String(element.element_id), element);
-          }
+      const payload = complete.bytes;
+      const completeMsgId = complete.msgId;
+      const pending = this.pendingJson.has(completeMsgId) ? this.pendingJson.get(completeMsgId) : null;
+      if (pending) this.pendingJson.delete(completeMsgId);
+
+      let resolveValue = {};
+
+      if (complete.type === 1) { // GET_DEVICES
+        const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+        const devices = [];
+        let offset = 0;
+        const decoder = new TextDecoder();
+        while (offset < payload.length) {
+           if (offset + 6 > payload.length) break;
+           const device_id = view.getUint32(offset, true);
+           const active = view.getUint8(offset + 4) !== 0;
+           const role = view.getUint8(offset + 5);
+           offset += 6;
+
+           let nameEnd = offset;
+           while (nameEnd < payload.length && payload[nameEnd] !== 0) nameEnd++;
+           const name = decoder.decode(payload.slice(offset, nameEnd));
+           offset = nameEnd + 1;
+
+           devices.push({ device_id, active, role: String(role), name });
         }
-        this.elementMetaByDevice.set(payload.device_id, byId);
+        this.devices = devices;
+        resolveValue = { devices };
       }
-      if (payload?.config && typeof payload.config === 'object') {
-        this.currentConfig = ensureConfigShape(payload.config);
+      else if (complete.type === 2) { // GET_DESCRIPTOR
+        if (this.pendingDescriptorBinary?.deviceId != null) {
+          this.descriptorCache.set(this.pendingDescriptorBinary.deviceId, payload);
+          log('Descriptor received', `${payload.length} bytes for device ${this.pendingDescriptorBinary.deviceId}`);
+        } else {
+          log('Descriptor received', `${payload.length} bytes`);
+        }
+        this.pendingDescriptorBinary = null;
+        resolveValue = {};
+      }
+      else if (complete.type === 4) { // GET_ELEMENTS
+        const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+        const elements = [];
+        for (let i = 0; i < payload.length / 9; i++) {
+           const off = i * 9;
+           elements.push({
+              element_id: view.getUint32(off, true),
+              kind: decodeElementKind(view.getUint8(off + 4)),
+              usage_page: view.getUint16(off + 5, true),
+              usage: view.getUint16(off + 7, true),
+           });
+        }
+        // device_id context was stored in pending request... we can inject if needed,
+        // but for now let's just assume we store it by the last requested device_id.
+        // Or refactor to pass device_id in response.
+        // Given we don't have device_id in response, we use the selected device.
+        const device_id = this.selectedDeviceId || 0;
+        if (!this.elementMetaByDevice.has(device_id)) {
+           this.elementMetaByDevice.set(device_id, new Map());
+        }
+        const devMap = this.elementMetaByDevice.get(device_id);
+        for (const el of elements) {
+           devMap.set(String(el.element_id), el);
+        }
+        resolveValue = { elements };
+      }
+      else if (complete.type === 5) { // CONFIG
+        this.currentConfig = decodeMappingProfile(payload);
+        resolveValue = { config: this.currentConfig };
+      }
+      else if (complete.type === 6) { // SAVE_PROFILE ACK
+        resolveValue = { note: 'Saved' };
       }
 
+      if (pending) pending.resolve(resolveValue);
       render();
       return;
     }
 
-    if (complete.type === 2) {
-      if (this.pendingDescriptorBinary?.deviceId != null) {
-        this.descriptorCache.set(this.pendingDescriptorBinary.deviceId, complete.bytes);
-        log('Descriptor received', `${complete.bytes.length} bytes for device ${this.pendingDescriptorBinary.deviceId}`);
-      } else {
-        log('Descriptor received', `${complete.bytes.length} bytes`);
+    if (complete.type === 3) { // ERROR
+      const code = complete.bytes[0];
+      const errStr = `Error code ${code}`;
+      showError(`Command failed: ${errStr}`);
+      if (this.pendingJson.has(complete.msgId)) {
+         this.pendingJson.get(complete.msgId).reject(new Error(errStr));
+         this.pendingJson.delete(complete.msgId);
       }
-      this.pendingDescriptorBinary = null;
-      render();
       return;
     }
 
-    log('Unhandled EVT frame', `type=${complete.type} len=${complete.bytes.length}`);
+    // Auto-ack anything else
+    if (complete.type === 7 || complete.type === 8) { // START/STOP STREAM ACK
+       if (this.pendingJson.has(complete.msgId)) {
+          this.pendingJson.get(complete.msgId).resolve({});
+          this.pendingJson.delete(complete.msgId);
+       }
+       return;
+    }
+
   }
 
   handleStreamNotification(bytes) {

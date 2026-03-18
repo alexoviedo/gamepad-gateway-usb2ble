@@ -114,6 +114,18 @@ Declared in `idf_component.yml`:
 
 ---
 
+## CI/CD Pipeline and Webapp Deployment
+
+This project uses a GitHub Actions workflow to automatically:
+1. Build the ESP32-S3 firmware using the `espressif/esp-idf-ci-action` action.
+2. Generate browser-flashable firmware manifests (so the firmware can be flashed directly from the browser using Web Serial).
+3. Build the configuration web application.
+4. Deploy the web app and the latest firmware binaries to **GitHub Pages**.
+
+When changes are pushed to `main`, the CI pipeline produces the web application and a `beta` firmware release channel accessible under the deployed web app.
+
+---
+
 ## Installation & Building
 
 ### 1) Install ESP-IDF

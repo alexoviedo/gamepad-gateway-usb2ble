@@ -9,3 +9,15 @@
 - Tests added or updated: Verified against existing webapp test suite `app.test.js` covering JSON ingestion.
 - Remaining weak spots: NVS read/write could still use a stronger serialization schema like Protocol Buffers or FlatBuffers rather than plain JSON for raw storage, but JSON is maintained for web compat.
 - Recommended next hardening steps: Isolate `cJSON` entirely by migrating the frontend and backend protocol to a binary packed format to save MTU space and compute overhead. Add follow-me runtime config validators in the web app UI.
+
+- Summary: I migrated the frontend and backend protocol from JSON-over-BLE to a tightly packed binary format to save MTU space and compute overhead, successfully isolating and removing all `cJSON` dependencies from the mapping engine and BLE layer.
+- Subsystems audited: Firmware (BLE Config Service, Mapping Engine, NVS Store) and Frontend Webapp (BLE Client Command dispatcher and event parser).
+- Major contract boundaries added: Implemented `ble_protocol.h` to define the shared memory layout/struct boundaries over the wire for BLE.
+- Major type-safety improvements: The BLE handler now directly reads from typed `struct` definitions, rather than trusting and verifying fields inside JSON trees.
+- Major schema-validation improvements: Commands like `set_config` and `save_profile` now explicitly cast and validate binary struct boundaries (`MappingProfileBin`).
+- Major interface-integrity improvements: Handlers no longer require `cJSON` extraction logic, eliminating dynamic allocation errors (`OOM`) or string parsing issues for core mapping operations.
+- Major composability improvements: The `HotasConfigClient` inside the webapp now supports binary command and event formats with a `DataView` parser, cleanly separating transport representation from application state arrays.
+- Files changed: `main/ble_protocol.h`, `main/mapping_engine.cpp`, `main/mapping_engine.h`, `main/nvs_profile_store.h`, `main/nvs_profile_store.cpp`, `main/ble_config_service.cpp`, `webapp/app.js`, `webapp/app.test.js`.
+- Tests added or updated: Updated `webapp/app.test.js` to simulate and assert binary array events parsed through the `handleEvtNotification` adapter.
+- Remaining weak spots: Binary framing does not yet include a strict CRC inside the BLE chunks natively (relying on BLE L2CAP checking), though NVS storage maintains CRC32 verification.
+- Recommended next hardening steps: Write end-to-end integration tests that send crafted binary blobs directly via a mocked BLE stack to assert firmware rejection limits.

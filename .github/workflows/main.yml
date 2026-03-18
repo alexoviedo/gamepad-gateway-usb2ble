@@ -1,0 +1,86 @@
+name: Build Firmware and Deploy Webapp
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          # Note: dependencies.lock uses idf 5.5.3, but the action doesn't support 5.5.3 directly yet.
+          # We use latest or a supported version, 5.4 works.
+          esp_idf_version: latest
+          target: esp32s3
+          path: '.'
+
+      - name: Generate Firmware Manifest
+        run: |
+          python3 scripts/generate_firmware_manifest.py \
+            --version "github-run-${{ github.run_number }}" \
+            --channel beta \
+            --web-root webapp/firmware \
+            --bootloader build/bootloader/bootloader.bin \
+            --partition-table build/partition_table/partition-table.bin \
+            --app-binary build/hotas-bridge.bin
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-artifacts
+          path: webapp/firmware/
+
+  deploy-webapp:
+    needs: build-firmware
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-artifacts
+          path: webapp/firmware/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Webapp (Typecheck and Lint)
+        # Note: The webapp is a static site (HTML/JS/CSS), so it doesn't need to be compiled.
+        # We just run typecheck and lint to ensure it's valid before deploying.
+        run: |
+          npm install
+          npm run check:web
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Upload the entire webapp directory to be served on GitHub Pages
+          path: './webapp'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

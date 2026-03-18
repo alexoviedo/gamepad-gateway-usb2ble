@@ -2,19 +2,24 @@ import { HotasConfigClient, showError } from './app.js';
 
 // Minimal mock for DataView
 global.DataView = global.DataView || class {
-  constructor(buffer) { this.buffer = buffer; }
-  getUint8(offset) { return new Uint8Array(this.buffer)[offset]; }
+  constructor(buffer, byteOffset=0, byteLength=undefined) {
+      this.buffer = buffer;
+      this.byteOffset = byteOffset;
+      this.byteLength = byteLength !== undefined ? byteLength : buffer.byteLength;
+  }
+  getUint8(offset) { return new Uint8Array(this.buffer, this.byteOffset, this.byteLength)[offset]; }
   getUint16(offset, littleEndian) {
-    const view = new Uint8Array(this.buffer);
+    const view = new Uint8Array(this.buffer, this.byteOffset, this.byteLength);
     return littleEndian ? view[offset] | (view[offset+1] << 8) : (view[offset] << 8) | view[offset+1];
   }
   getUint32(offset, littleEndian) {
-    const view = new Uint8Array(this.buffer);
+    const view = new Uint8Array(this.buffer, this.byteOffset, this.byteLength);
     if (littleEndian) {
         return view[offset] | (view[offset+1] << 8) | (view[offset+2] << 16) | (view[offset+3] << 24);
     }
     return (view[offset] << 24) | (view[offset+1] << 16) | (view[offset+2] << 8) | view[offset+3];
   }
+  setUint8(offset, val) { new Uint8Array(this.buffer, this.byteOffset, this.byteLength)[offset] = val; }
 };
 
 // Mock TextDecoder/Encoder
@@ -48,66 +53,42 @@ async function runTests() {
     writeValue: async () => {}
   };
 
-  // --- Test Case 1: getConfig handles valid JSON ---
+  // Test 1: getConfig returns valid parsed binary structure
   try {
     client.sendCommand = async () => ({
-      config_json: JSON.stringify({ version: 2, axes: { z: { configured: true, device_id: 1, element_id: 2 } } })
+      config: { version: 2, axes: { z: { configured: true, device_id: 1, element_id: 2 } } }
     });
     await client.getConfig();
-    assert(client.currentConfig.version === 2, 'getConfig should parse valid JSON');
+    assert(client.currentConfig.version === 2, 'getConfig should parse valid object');
   } catch (e) {
     assert(false, 'Test 1 failed: ' + e.message);
   }
 
-  // --- Test Case 2: getConfig handles malformed JSON (The New Catch Block) ---
+  // Test 2: handleEvtNotification parses binary device stream
   try {
-    client.sendCommand = async () => ({
-      config_json: '{"invalid": json'
-    });
-
-    await client.getConfig();
-    assert(true, 'getConfig should reach end without crashing on malformed JSON');
-  } catch (e) {
-    assert(false, 'Test 2 crashed on malformed JSON: ' + e.message);
-  }
-
-  // --- Test Case 3: handleEvtNotification handles valid JSON ---
-  try {
-    const validJson = JSON.stringify({ rid: 123, devices: [{ device_id: 1, role: 'stick' }] });
-    const bytes = new TextEncoder().encode(validJson);
+    const payload = new Uint8Array([
+      1, 0, 0, 0, // device_id
+      1, // active
+      1, // role
+      65, 66, 67, 0 // name "ABC"
+    ]);
 
     client.chunkAssembler.push = () => ({
-      type: 1,
-      bytes: bytes
+      type: 1, // GET_DEVICES
+      bytes: payload
     });
 
     client.pendingJson.set(123, {
-      resolve: (payload) => {
-        assert(payload.rid === 123, 'handleEvtNotification should resolve pending JSON');
+      resolve: (val) => {
+        assert(val.devices && val.devices[0].device_id === 1, 'handleEvtNotification should resolve devices');
       },
       reject: () => {}
     });
 
-    client.handleEvtNotification(new Uint8Array(10));
-    assert(client.devices[0].device_id === 1, 'handleEvtNotification should update devices list');
+    client.handleEvtNotification(new Uint8Array([2, 1, 123, 0, 0, 0, 10, 0, ...payload]));
+    assert(client.devices[0].name === "ABC", 'handleEvtNotification should update devices list');
   } catch (e) {
-    assert(false, 'Test 3 failed: ' + e.message);
-  }
-
-  // --- Test Case 4: handleEvtNotification handles malformed JSON (The Existing Catch Block) ---
-  try {
-    const malformedJson = '{"invalid": json';
-    const bytes = new TextEncoder().encode(malformedJson);
-
-    client.chunkAssembler.push = () => ({
-      type: 1,
-      bytes: bytes
-    });
-
-    client.handleEvtNotification(new Uint8Array(10));
-    assert(true, 'handleEvtNotification should reach end without crashing on malformed JSON');
-  } catch (e) {
-    assert(false, 'Test 4 failed: ' + e.message);
+    assert(false, 'Test 2 failed: ' + e.message);
   }
 
   console.log(`\nTests finished. Passed: ${passed}, Failed: ${failed}`);
