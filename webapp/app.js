@@ -713,10 +713,10 @@ export class HotasConfigClient {
     this.devices = Array.isArray(response.devices) ? response.devices : [];
 
     const liveIds = new Set(this.devices.map((device) => device.device_id));
-    for (const key of [...this.descriptorCache.keys()]) {
+    for (const key of this.descriptorCache.keys()) {
       if (!liveIds.has(key)) this.descriptorCache.delete(key);
     }
-    for (const key of [...this.elementMetaByDevice.keys()]) {
+    for (const key of this.elementMetaByDevice.keys()) {
       if (!liveIds.has(key)) this.elementMetaByDevice.delete(key);
     }
 
