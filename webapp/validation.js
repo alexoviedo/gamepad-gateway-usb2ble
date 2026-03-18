@@ -165,9 +165,7 @@ function ensureConfigShape(config) {
   shaped.version = 2;
   shaped.axes = shaped.axes || {};
   for (const output of OUTPUTS) {
-    if (shaped.axes[output.key]) {
-      shaped.axes[output.key] = normalizeAxisConfig(shaped.axes[output.key]);
-    }
+    shaped.axes[output.key] = normalizeAxisConfig(shaped.axes[output.key]);
   }
   return shaped;
 }
@@ -740,13 +738,20 @@ function outputMeta(output) {
   return OUTPUTS.find((item) => item.key === output) || OUTPUTS[0];
 }
 
+let cachedConfigInstance = null;
+let cachedConfigShape = null;
+
 function computeMappedOutputs() {
-  const config = ensureConfigShape(client.currentConfig);
-  client.currentConfig = config;
+  if (client.currentConfig !== cachedConfigInstance) {
+    cachedConfigShape = ensureConfigShape(client.currentConfig);
+    client.currentConfig = cachedConfigShape;
+    cachedConfigInstance = client.currentConfig;
+  }
+  const config = cachedConfigShape;
   const next = {};
 
   for (const output of OUTPUTS) {
-    const mapping = normalizeAxisConfig(config.axes[output.key]);
+    const mapping = config.axes[output.key] || normalizeAxisConfig(null);
     const sample = mapping.configured
       ? client.latestSampleByKey.get(`${mapping.device_id}:${mapping.element_id}`) || null
       : null;
