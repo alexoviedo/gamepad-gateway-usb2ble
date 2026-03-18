@@ -58,9 +58,11 @@ async function fetchJson(url) {
 
 async function ensureEspWebToolsLoaded() {
   if (window.customElements?.get('esp-web-install-button')) return;
-  if (window.__hotasEspWebToolsPromise) return window.__hotasEspWebToolsPromise;
+  /** @type {any} */
+  const win = window;
+  if (win.__hotasEspWebToolsPromise) return win.__hotasEspWebToolsPromise;
 
-  window.__hotasEspWebToolsPromise = new Promise((resolve, reject) => {
+  win.__hotasEspWebToolsPromise = new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.type = 'module';
     script.src = HOTAS_FLASHER_SCRIPT;
@@ -69,7 +71,7 @@ async function ensureEspWebToolsLoaded() {
     document.head.appendChild(script);
   });
 
-  return window.__hotasEspWebToolsPromise;
+  return win.__hotasEspWebToolsPromise;
 }
 
 function renderInstallButton(target, manifestUrl) {

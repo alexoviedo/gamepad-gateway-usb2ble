@@ -52,6 +52,7 @@ const tuningState = {
   previewMetaKey: '',
 };
 
+/** @type {any} */
 const elements = (typeof document !== 'undefined') ? {
   connectBtn: document.getElementById('connectBtn'),
   reconnectBtn: document.getElementById('reconnectBtn'),

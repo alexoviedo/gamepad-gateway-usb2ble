@@ -33,6 +33,7 @@ const DEFAULT_AXIS_CONFIG = Object.freeze({
   },
 });
 
+/** @type {any} */
 const elements = {
   connectBtn: document.getElementById('connectBtn'),
   reconnectBtn: document.getElementById('reconnectBtn'),

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { HotasConfigClient, showError } from './app.js';
 
 // Minimal mock for DataView
