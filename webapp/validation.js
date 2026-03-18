@@ -33,42 +33,47 @@ const DEFAULT_AXIS_CONFIG = Object.freeze({
   },
 });
 
-/** @type {any} */
 const elements = {
-  connectBtn: document.getElementById('connectBtn'),
-  reconnectBtn: document.getElementById('reconnectBtn'),
-  disconnectBtn: document.getElementById('disconnectBtn'),
-  refreshConfigBtn: document.getElementById('refreshConfigBtn'),
-  startStreamBtn: document.getElementById('startStreamBtn'),
-  saveBtn: document.getElementById('saveBtn'),
-  rebootRunBtn: document.getElementById('rebootRunBtn'),
-  connBadge: document.getElementById('connBadge'),
-  streamBadge: document.getElementById('streamBadge'),
-  saveBadge: document.getElementById('saveBadge'),
-  modeBadge: document.getElementById('modeBadge'),
-  deviceName: document.getElementById('deviceName'),
-  gattState: document.getElementById('gattState'),
-  configState: document.getElementById('configState'),
-  sampleRate: document.getElementById('sampleRate'),
-  telemetryGrid: document.getElementById('telemetryGrid'),
-  primaryInstrumentGrid: document.getElementById('primaryInstrumentGrid'),
-  secondaryInstrumentGrid: document.getElementById('secondaryInstrumentGrid'),
-  sceneCanvas: document.getElementById('sceneCanvas'),
-  logPanel: document.getElementById('logPanel'),
-  clearLogBtn: document.getElementById('clearLogBtn'),
-  errorBanner: document.getElementById('errorBanner'),
+  connectBtn: /** @type {HTMLButtonElement} */ (document.getElementById('connectBtn')),
+  reconnectBtn: /** @type {HTMLButtonElement} */ (document.getElementById('reconnectBtn')),
+  disconnectBtn: /** @type {HTMLButtonElement} */ (document.getElementById('disconnectBtn')),
+  refreshConfigBtn: /** @type {HTMLButtonElement} */ (document.getElementById('refreshConfigBtn')),
+  startStreamBtn: /** @type {HTMLButtonElement} */ (document.getElementById('startStreamBtn')),
+  saveBtn: /** @type {HTMLButtonElement} */ (document.getElementById('saveBtn')),
+  rebootRunBtn: /** @type {HTMLButtonElement} */ (document.getElementById('rebootRunBtn')),
+  connBadge: /** @type {HTMLElement} */ (document.getElementById('connBadge')),
+  streamBadge: /** @type {HTMLElement} */ (document.getElementById('streamBadge')),
+  saveBadge: /** @type {HTMLElement} */ (document.getElementById('saveBadge')),
+  modeBadge: /** @type {HTMLElement} */ (document.getElementById('modeBadge')),
+  deviceName: /** @type {HTMLElement} */ (document.getElementById('deviceName')),
+  gattState: /** @type {HTMLElement} */ (document.getElementById('gattState')),
+  configState: /** @type {HTMLElement} */ (document.getElementById('configState')),
+  sampleRate: /** @type {HTMLElement} */ (document.getElementById('sampleRate')),
+  telemetryGrid: /** @type {HTMLElement} */ (document.getElementById('telemetryGrid')),
+  primaryInstrumentGrid: /** @type {HTMLElement} */ (document.getElementById('primaryInstrumentGrid')),
+  secondaryInstrumentGrid: /** @type {HTMLElement} */ (document.getElementById('secondaryInstrumentGrid')),
+  sceneCanvas: /** @type {HTMLElement} */ (document.getElementById('sceneCanvas')),
+  logPanel: /** @type {HTMLElement} */ (document.getElementById('logPanel')),
+  clearLogBtn: /** @type {HTMLButtonElement} */ (document.getElementById('clearLogBtn')),
+  errorBanner: /** @type {HTMLElement} */ (document.getElementById('errorBanner')),
 };
 
 function nowLabel() {
   return new Date().toLocaleTimeString();
 }
 
+/**
+ * @param {any} message
+ */
 function log(message, detail = '') {
   const line = `[${nowLabel()}] ${message}${detail ? ` ${detail}` : ''}`;
   elements.logPanel.textContent += `${line}\n`;
   elements.logPanel.scrollTop = elements.logPanel.scrollHeight;
 }
 
+/**
+ * @param {any} message
+ */
 function showError(message) {
   elements.errorBanner.textContent = message;
   elements.errorBanner.classList.remove('hidden');
@@ -80,22 +85,39 @@ function clearError() {
   elements.errorBanner.classList.add('hidden');
 }
 
+/**
+ * @param {any} value
+ */
 function encodeUtf8(value) {
   return new TextEncoder().encode(value);
 }
 
+/**
+ * @param {any} bytes
+ */
 function decodeUtf8(bytes) {
   return new TextDecoder().decode(bytes);
 }
 
+/**
+ * @param {any} value
+ * @param {any} min
+ * @param {any} max
+ */
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+/**
+ * @param {any} value
+ */
 function round3(value) {
   return Math.round(value * 1000) / 1000;
 }
 
+/**
+ * @param {any} str
+ */
 function escapeHTML(str) {
   if (str == null) return '';
   return String(str)
@@ -106,10 +128,17 @@ function escapeHTML(str) {
     .replace(/'/g, '&#039;');
 }
 
+/**
+ * @param {any} value
+ */
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+/**
+ * @param {any} target
+ * @param {any} patch
+ */
 function deepMerge(target, patch) {
   if (patch == null || typeof patch !== 'object' || Array.isArray(patch)) return patch;
   const out = Array.isArray(target) ? [...target] : { ...(target || {}) };
@@ -123,14 +152,23 @@ function deepMerge(target, patch) {
   return out;
 }
 
+/**
+ * @param {any} config
+ */
 function configToStableString(config) {
   return JSON.stringify(config ?? {});
 }
 
+/**
+ * @param {any} axisKey
+ */
 function isSliderAxis(axisKey) {
   return axisKey === 'slider1' || axisKey === 'slider2';
 }
 
+/**
+ * @param {any} mapping
+ */
 function normalizeAxisConfig(mapping) {
   const merged = deepMerge(DEFAULT_AXIS_CONFIG, mapping || {});
   if (typeof merged.deadzone === 'number') {
@@ -161,6 +199,9 @@ function normalizeAxisConfig(mapping) {
   return merged;
 }
 
+/**
+ * @param {any} config
+ */
 function ensureConfigShape(config) {
   const shaped = deepClone(config || { version: 2, axes: {} });
   shaped.version = 2;
@@ -171,11 +212,22 @@ function ensureConfigShape(config) {
   return shaped;
 }
 
+/**
+ * @param {any} a
+ * @param {any} b
+ * @param {any} c
+ * @param {any} d
+ * @param {any} t
+ */
 function cubicBezier(a, b, c, d, t) {
   const mt = 1 - t;
   return mt * mt * mt * a + 3 * mt * mt * t * b + 3 * mt * t * t * c + t * t * t * d;
 }
 
+/**
+ * @param {any} x
+ * @param {any} curve
+ */
 function applyBezier01(x, curve) {
   const p1x = clamp(Number(curve?.p1?.x ?? 0.25), 0, 1);
   const p1y = clamp(Number(curve?.p1?.y ?? 0.25), 0, 1);
@@ -194,6 +246,11 @@ function applyBezier01(x, curve) {
   return clamp(cubicBezier(0, p1y, p2y, 1, t), 0, 1);
 }
 
+/**
+ * @param {any} v
+ * @param {any} inner
+ * @param {any} outer
+ */
 function applyDeadzoneBipolar(v, inner, outer) {
   inner = clamp(inner, 0, 0.99);
   outer = clamp(outer, 0, 0.99);
@@ -207,6 +264,11 @@ function applyDeadzoneBipolar(v, inner, outer) {
   return sign * ((mag - inner) / (limit - inner));
 }
 
+/**
+ * @param {any} v
+ * @param {any} inner
+ * @param {any} outer
+ */
 function applyDeadzoneUnipolar(v, inner, outer) {
   inner = clamp(inner, 0, 0.99);
   outer = clamp(outer, 0, 0.99);
@@ -219,6 +281,11 @@ function applyDeadzoneUnipolar(v, inner, outer) {
   return (v - inner) / (limit - inner);
 }
 
+/**
+ * @param {any} sample
+ * @param {any} axisKey
+ * @param {any} mapping
+ */
 function computeMappedOutput(sample, axisKey, mapping, previousSmoothed = null) {
   if (!sample || !mapping?.configured) {
     return {
@@ -260,6 +327,9 @@ class ChunkAssembler {
     this.messages = new Map();
   }
 
+/**
+ * @param {any} frameBytes
+ */
   push(frameBytes) {
     if (frameBytes.byteLength < 8) return null;
     const view = new DataView(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength);
@@ -348,6 +418,9 @@ class BridgeClient {
     this.characteristics.stream = await this.service.getCharacteristic(UUIDS.stream);
 
     await this.characteristics.evt.startNotifications();
+/**
+ * @param {any} event
+ */
     this.characteristics.evt.addEventListener('characteristicvaluechanged', this.handleEvtBound ??= (event) => {
       const value = event.target.value;
       const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
@@ -355,6 +428,9 @@ class BridgeClient {
     });
 
     await this.characteristics.stream.startNotifications();
+/**
+ * @param {any} event
+ */
     this.characteristics.stream.addEventListener('characteristicvaluechanged', this.handleStreamBound ??= (event) => {
       const value = event.target.value;
       const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
@@ -391,6 +467,9 @@ class BridgeClient {
     render();
   }
 
+/**
+ * @param {any} command
+ */
   async sendCommand(command) {
     if (!this.characteristics.cmd) throw new Error('Not connected to the Config Service.');
     const rid = ++this.requestId;
@@ -443,6 +522,9 @@ class BridgeClient {
     return this.sendCommand({ cmd: 'reboot_to_run' });
   }
 
+/**
+ * @param {any} bytes
+ */
   handleEvtNotification(bytes) {
     const complete = this.chunkAssembler.push(bytes);
     if (!complete) return;
@@ -471,6 +553,9 @@ class BridgeClient {
     render();
   }
 
+/**
+ * @param {any} bytes
+ */
   handleStreamNotification(bytes) {
     if (bytes.byteLength < 16) return;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -496,6 +581,9 @@ class BridgeClient {
 
 
 class ValidationScene {
+/**
+ * @param {any} container
+ */
   constructor(container) {
     this.container = container;
     this.focusPoint = new THREE.Vector3(0, 1.0, 0.05);
@@ -653,6 +741,9 @@ class ValidationScene {
     this.rightPedal.position.set(1.02, 0, 0.02);
     this.pedalYaw.add(this.rightPedal);
 
+/**
+ * @param {any} group
+ */
     const buildPedal = (group, mirror = 1) => {
       const arm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, 0.78), surfaceMat);
       arm.position.set(0, 0.02, 0.24);
@@ -695,6 +786,9 @@ class ValidationScene {
     this.scene.add(backArc);
   }
 
+/**
+ * @param {any} mapped
+ */
   setTargets(mapped) {
     for (const key of Object.keys(this.target)) {
       this.target[key] = mapped[key]?.smoothed ?? 0;
@@ -735,11 +829,16 @@ const client = new BridgeClient();
 const scene = new ValidationScene(elements.sceneCanvas);
 let mappedOutputs = {};
 
+/**
+ * @param {any} output
+ */
 function outputMeta(output) {
   return OUTPUTS.find((item) => item.key === output) || OUTPUTS[0];
 }
 
+/** @type {Record<string, any> | null} */
 let cachedConfigInstance = null;
+/** @type {Record<string, any> | null} */
 let cachedConfigShape = null;
 
 function computeMappedOutputs() {
@@ -769,10 +868,16 @@ function computeMappedOutputs() {
   scene.setTargets(mappedOutputs);
 }
 
+/**
+ * @param {any} sample
+ */
 function sampleSourceLabel(sample) {
   return sample ? escapeHTML(`${sample.deviceId}:${sample.elementId}`) : '—';
 }
 
+/**
+ * @param {any} state
+ */
 function isRecentUpdate(state) {
   if (!state?.updatedAt) return false;
   const ts = state.updatedAt instanceof Date ? state.updatedAt.getTime() : new Date(state.updatedAt).getTime();
@@ -835,6 +940,9 @@ function createInstrumentCard({ title, subtitle, stateLabel, active, primary = f
   return card;
 }
 
+/**
+ * @param {any} state
+ */
 function buildAxisTrackMarkup(state, { slider = false } = {}) {
   const fillTransform = slider
     ? `scaleX(${clamp(state.smoothed ?? 0, 0, 1)})`
@@ -992,6 +1100,9 @@ function createThrottleInstrument() {
   return card;
 }
 
+/**
+ * @param {any} outputKey
+ */
 function createCompactAxisInstrument(outputKey) {
   const meta = outputMeta(outputKey);
   const state = mappedOutputs[outputKey] || { raw: 0, deadzoned: 0, curved: 0, smoothed: 0, configured: false };
@@ -1098,6 +1209,9 @@ function render() {
   renderInstrumentDeck();
 }
 
+/**
+ * @param {any} fn
+ */
 async function guarded(fn) {
   clearError();
   try {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { performance } from 'perf_hooks';
 
 // Simulate HotasConfigClient structures
@@ -10,6 +9,9 @@ class HotasConfigClient {
   }
 
   // Current implementation
+/**
+ * @param {any} liveIds
+ */
   currentGetDevices(liveIds) {
     for (const key of [...this.descriptorCache.keys()]) {
       if (!liveIds.has(key)) this.descriptorCache.delete(key);
@@ -20,6 +22,9 @@ class HotasConfigClient {
   }
 
   // Optimized implementation
+/**
+ * @param {any} liveIds
+ */
   optimizedGetDevices(liveIds) {
     for (const key of this.descriptorCache.keys()) {
       if (!liveIds.has(key)) this.descriptorCache.delete(key);
@@ -30,6 +35,10 @@ class HotasConfigClient {
   }
 }
 
+/**
+ * @param {any} numItems
+ * @param {any} deletePercent
+ */
 function runBenchmark(numItems, deletePercent) {
   console.log(`\nBenchmarking with ${numItems} items, deleting ${deletePercent * 100}%...`);
 
