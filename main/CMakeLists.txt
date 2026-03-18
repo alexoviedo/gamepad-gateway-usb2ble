@@ -16,7 +16,7 @@ idf_component_register(
     REQUIRES usb usb_host_hid esp_hid bt
 
     # Private deps (headers we include internally)
-    PRIV_REQUIRES nvs_flash esp_driver_gpio cjson mbedtls
+    PRIV_REQUIRES nvs_flash esp_driver_gpio json mbedtls
 )
 
 # NimBLE structs use designated initializers; keep warnings quiet on newer GCC.
