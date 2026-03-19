@@ -10,11 +10,21 @@ export default [
       sourceType: 'module',
       globals: {
         ...globals.browser,
+        renderMappingsSummary: 'readonly',
       },
     },
     rules: {
       'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'no-undef': 'error',
+      'no-useless-escape': 'off',
+    },
+  },
+  {
+    files: ['webapp/**/*.test.js'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
     },
   },
 ];

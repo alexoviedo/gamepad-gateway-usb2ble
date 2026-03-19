@@ -16,7 +16,7 @@ static const char *TAG = "HID_MGR";
 #define MAX_DEVICES 8
 static HidDeviceContext g_devices[MAX_DEVICES];
 static SemaphoreHandle_t g_state_mutex = nullptr;
-static GamepadState g_merged_state = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static GamepadState g_merged_state = {0, 0, 0, 0, 0, 0, 0, 0, HatDirection::CENTER, 0};
 
 static void print_device_caps(const HidDeviceContext *ctx) {
   ESP_LOGI(TAG, "Device registered. Role=%d Elements=%d", (int)ctx->caps.role,

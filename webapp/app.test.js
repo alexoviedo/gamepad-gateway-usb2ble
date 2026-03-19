@@ -1,4 +1,4 @@
-import { HotasConfigClient, showError } from './app.js';
+import { HotasConfigClient } from './app.js';
 
 // Minimal mock for DataView
 global.DataView = global.DataView || class {
