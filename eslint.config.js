@@ -19,4 +19,12 @@ export default [
       'no-useless-escape': 'off',
     },
   },
+  {
+    files: ['webapp/**/*.test.js'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
 ];
