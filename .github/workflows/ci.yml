@@ -123,12 +123,14 @@ jobs:
       - name: Check web app
         run: npm run check:web
 
+      - name: Build webapp
+        run: npm run build
+
       - name: Package webapp artifact
         run: |
-          mkdir -p out/site
-          rsync -a --delete --exclude '.DS_Store' webapp/ out/site/
-          touch out/site/.nojekyll
-          tar -C out/site -czf out/webapp-pages.tgz .
+          test -f webapp/dist/index.html
+          mkdir -p out
+          tar -C webapp/dist -czf out/webapp-pages.tgz .
 
       - name: Upload webapp artifact
         uses: actions/upload-artifact@v4
