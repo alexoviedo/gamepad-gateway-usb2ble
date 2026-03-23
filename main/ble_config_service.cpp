@@ -12,7 +12,6 @@
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <freertos/semphr.h>
 
 #include <math.h>
 #include <string>
@@ -79,10 +78,6 @@ static uint16_t g_stream_elem_cursor = 0;
 
 static uint16_t g_msg_id = 0;
 
-// Pace chunked EVT notifications so we do not exhaust NimBLE mbufs when
-// sending larger JSON payloads like descriptors or config.
-static SemaphoreHandle_t g_evt_tx_sem = nullptr;
-
 static std::string g_config_json = "{}";
 static constexpr size_t kMaxConfigJsonBytes = 4096;
 
@@ -102,15 +97,17 @@ static uint8_t g_last_stream_sample_buf[kStreamSampleLen];
 //   u16 offset
 //   u16 total_len
 //   u8  payload[0..(MTU-3-8)]
-static void notify_evt_chunked(uint8_t type, const uint8_t *data, uint16_t total_len) {
-  if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return;
-  if (!g_evt_notify_enabled) return;
-  if (g_evt_handle == 0) return;
+static bool notify_evt_chunked(uint8_t type, const uint8_t *data, uint16_t total_len) {
+  if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return false;
+  if (!g_evt_notify_enabled) return false;
+  if (g_evt_handle == 0) return false;
 
   const uint16_t msg_id = ++g_msg_id;
 
   constexpr size_t kHdrLen = 8;
   constexpr size_t kMaxValueCap = 244;
+  constexpr int kMaxNotifyRetries = 12;
+
   uint16_t mtu = ble_att_mtu(g_conn_handle);
   size_t max_value_len = (mtu > 3) ? (size_t)(mtu - 3) : 20;
   if (max_value_len > kMaxValueCap) max_value_len = kMaxValueCap;
@@ -119,14 +116,6 @@ static void notify_evt_chunked(uint8_t type, const uint8_t *data, uint16_t total
 
   uint16_t offset = 0;
   while (offset < total_len) {
-    if (g_evt_tx_sem) {
-      if (xSemaphoreTake(g_evt_tx_sem, pdMS_TO_TICKS(750)) != pdTRUE) {
-        ESP_LOGW(TAG, "EVT pacing timeout msg=%u off=%u/%u", (unsigned)msg_id,
-                 (unsigned)offset, (unsigned)total_len);
-        return;
-      }
-    }
-
     uint8_t buf[kMaxValueCap];
     const uint16_t remaining = (uint16_t)(total_len - offset);
     const uint16_t chunk_len = (remaining > max_payload) ? (uint16_t)max_payload : remaining;
@@ -144,33 +133,65 @@ static void notify_evt_chunked(uint8_t type, const uint8_t *data, uint16_t total
       memcpy(&buf[kHdrLen], data + offset, chunk_len);
     }
 
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, kHdrLen + chunk_len);
-    if (!om) {
-      ESP_LOGW(TAG, "EVT mbuf alloc failed at off=%u/%u", (unsigned)offset, (unsigned)total_len);
-      if (g_evt_tx_sem) xSemaphoreGive(g_evt_tx_sem);
-      return;
+    int rc = BLE_HS_EUNKNOWN;
+    for (int attempt = 0; attempt < kMaxNotifyRetries; ++attempt) {
+      if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE || !g_evt_notify_enabled || g_evt_handle == 0) {
+        ESP_LOGW(TAG, "EVT notify aborted mid-transfer at off=%u/%u", (unsigned)offset,
+                 (unsigned)total_len);
+        return false;
+      }
+
+      struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, kHdrLen + chunk_len);
+      if (!om) {
+        ESP_LOGW(TAG, "EVT mbuf alloc failed at off=%u/%u", (unsigned)offset,
+                 (unsigned)total_len);
+        vTaskDelay(pdMS_TO_TICKS(4));
+        continue;
+      }
+
+      rc = ble_gatts_notify_custom(g_conn_handle, g_evt_handle, om);
+      if (rc == 0) {
+        break;
+      }
+
+      ESP_LOGW(TAG,
+               "EVT notify retry rc=%d msg=%u off=%u/%u try=%d",
+               rc,
+               (unsigned)msg_id,
+               (unsigned)offset,
+               (unsigned)total_len,
+               attempt + 1);
+      vTaskDelay(pdMS_TO_TICKS(4 + attempt * 2));
     }
 
-    int rc = ble_gatts_notify_custom(g_conn_handle, g_evt_handle, om);
     if (rc != 0) {
-      ESP_LOGW(TAG, "EVT notify failed rc=%d msg=%u off=%u/%u", rc, (unsigned)msg_id,
-               (unsigned)offset, (unsigned)total_len);
-      if (g_evt_tx_sem) xSemaphoreGive(g_evt_tx_sem);
-      return;
+      ESP_LOGE(TAG,
+               "EVT notify failed rc=%d msg=%u off=%u/%u",
+               rc,
+               (unsigned)msg_id,
+               (unsigned)offset,
+               (unsigned)total_len);
+      return false;
     }
 
     offset = (uint16_t)(offset + chunk_len);
+    if (total_len > 128) {
+      vTaskDelay(pdMS_TO_TICKS(4));
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(1));
+    }
   }
 
   ESP_LOGI(TAG, "EVT send complete msg=%u len=%u type=%u", (unsigned)msg_id,
            (unsigned)total_len, (unsigned)type);
+  return true;
 }
 
 static void notify_evt_json(const char *json) {
   if (!json) return;
   const size_t len = strlen(json);
   if (len == 0 || len > 0xFFFF) return;
-  notify_evt_chunked(1, (const uint8_t *)json, (uint16_t)len);
+  (void)notify_evt_chunked(1, (const uint8_t *)json, (uint16_t)len);
 }
 
 // -----------------------------------------------------------------------------
@@ -637,12 +658,6 @@ void ble_config_service_on_connect(uint16_t conn_handle) {
   g_conn_handle = conn_handle;
   g_evt_notify_enabled = false;
   g_stream_notify_enabled = false;
-  if (!g_evt_tx_sem) {
-    g_evt_tx_sem = xSemaphoreCreateBinary();
-  }
-  if (g_evt_tx_sem) {
-    xSemaphoreGive(g_evt_tx_sem);
-  }
   ESP_LOGI(TAG, "Connected (handle=%u)", (unsigned)conn_handle);
 }
 
@@ -653,9 +668,6 @@ void ble_config_service_on_disconnect(void) {
   g_stream_notify_enabled = false;
   g_stream_active = false;
   g_last_stream_valid = false;
-  if (g_evt_tx_sem) {
-    xSemaphoreGive(g_evt_tx_sem);
-  }
 }
 
 void ble_config_service_on_subscribe(uint16_t attr_handle, uint8_t cur_notify) {
@@ -668,14 +680,7 @@ void ble_config_service_on_subscribe(uint16_t attr_handle, uint8_t cur_notify) {
   }
 }
 
-void ble_config_service_on_notify_tx(uint16_t attr_handle, int status) {
-  if (!g_evt_tx_sem) return;
-  if (g_evt_handle != 0 && attr_handle == g_evt_handle) {
-    xSemaphoreGive(g_evt_tx_sem);
-    if (status != 0) {
-      ESP_LOGW(TAG, "EVT notify-tx status=%d", status);
-    }
-  }
+void ble_config_service_on_notify_tx(uint16_t, int) {
 }
 
 void ble_config_service_stream_tick(void) {
