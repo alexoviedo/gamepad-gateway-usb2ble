@@ -65,14 +65,13 @@ jobs:
 
             const run = runs.find((candidate) =>
               candidate.name === 'PR Artifact Build' &&
-              candidate.conclusion === 'success' &&
-              Array.isArray(candidate.pull_requests) &&
-              candidate.pull_requests.some((pr) => pr.number === mergedPr.number)
+              candidate.head_sha === mergedPr.head.sha &&
+              candidate.conclusion === 'success'
             );
 
             if (!run) {
               core.setFailed(
-                `Could not find a successful "PR Artifact Build" run for PR #${mergedPr.number} at ${mergedPr.head.sha}.`
+                `Could not find a successful \"PR Artifact Build\" run for head SHA ${mergedPr.head.sha}.`
               );
               return;
             }
