@@ -669,7 +669,9 @@ export class HotasConfigClient {
         ? 30000
         : payload.cmd === 'get_devices'
           ? 15000
-          : 8000;
+          : payload.cmd === 'get_config'
+            ? 20000
+            : 8000;
 
       const responsePromise = new Promise((resolve, reject) => {
         const timeoutId = setTimeout(() => {
@@ -873,12 +875,6 @@ export class HotasConfigClient {
       }
 
       const rid = payload?.rid;
-      if (typeof rid === 'number' && this.pendingJson.has(rid)) {
-        const pending = this.pendingJson.get(rid);
-        this.pendingJson.delete(rid);
-        pending.resolve(payload);
-      }
-
       if (Array.isArray(payload?.devices)) this.devices = payload.devices;
       if (typeof payload?.device_id === 'number' && Array.isArray(payload?.elements)) {
         const byId = new Map();
@@ -895,6 +891,12 @@ export class HotasConfigClient {
       }
 
       render();
+
+      if (typeof rid === 'number' && this.pendingJson.has(rid)) {
+        const pending = this.pendingJson.get(rid);
+        this.pendingJson.delete(rid);
+        pending.resolve(payload);
+      }
       return;
     }
 

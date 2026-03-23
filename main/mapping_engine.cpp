@@ -351,6 +351,17 @@ static float clamp01(float v) {
   return v;
 }
 
+static bool axis_modifiers_are_default(const AxisModifiers &mod) {
+  return mod.invert == false &&
+         fabsf(mod.deadzone_inner - 0.0f) < 0.0005f &&
+         fabsf(mod.outer_clamp - 0.0f) < 0.0005f &&
+         fabsf(mod.smoothing_alpha - 0.0f) < 0.0005f &&
+         fabsf(mod.bezier_p1x - 0.25f) < 0.0005f &&
+         fabsf(mod.bezier_p1y - 0.25f) < 0.0005f &&
+         fabsf(mod.bezier_p2x - 0.75f) < 0.0005f &&
+         fabsf(mod.bezier_p2y - 0.75f) < 0.0005f;
+}
+
 static float apply_deadzone_bipolar(float v, float inner, float outer) {
   inner = clamp01(inner);
   outer = clamp01(outer);
@@ -506,22 +517,40 @@ static cJSON *axis_mapping_to_json(const AxisMapping &m) {
     cJSON_AddNumberToObject(obj, "device_id", (double)m.source.device_id);
     cJSON_AddNumberToObject(obj, "element_id", (double)m.source.element_id);
   }
-  cJSON_AddBoolToObject(obj, "invert", m.mod.invert);
 
-  cJSON *deadzone = cJSON_AddObjectToObject(obj, "deadzone");
-  cJSON_AddNumberToObject(deadzone, "inner", m.mod.deadzone_inner);
-  cJSON_AddNumberToObject(deadzone, "outer", m.mod.outer_clamp);
+  const bool include_modifiers = m.configured && !axis_modifiers_are_default(m.mod);
+  if (!include_modifiers) {
+    return obj;
+  }
 
-  cJSON_AddNumberToObject(obj, "smoothing_alpha", m.mod.smoothing_alpha);
+  if (m.mod.invert) {
+    cJSON_AddBoolToObject(obj, "invert", true);
+  }
 
-  cJSON *curve = cJSON_AddObjectToObject(obj, "curve");
-  cJSON_AddStringToObject(curve, "type", "bezier");
-  cJSON *p1 = cJSON_AddObjectToObject(curve, "p1");
-  cJSON_AddNumberToObject(p1, "x", m.mod.bezier_p1x);
-  cJSON_AddNumberToObject(p1, "y", m.mod.bezier_p1y);
-  cJSON *p2 = cJSON_AddObjectToObject(curve, "p2");
-  cJSON_AddNumberToObject(p2, "x", m.mod.bezier_p2x);
-  cJSON_AddNumberToObject(p2, "y", m.mod.bezier_p2y);
+  if (fabsf(m.mod.deadzone_inner - 0.0f) >= 0.0005f || fabsf(m.mod.outer_clamp - 0.0f) >= 0.0005f) {
+    cJSON *deadzone = cJSON_AddObjectToObject(obj, "deadzone");
+    cJSON_AddNumberToObject(deadzone, "inner", m.mod.deadzone_inner);
+    cJSON_AddNumberToObject(deadzone, "outer", m.mod.outer_clamp);
+  }
+
+  if (fabsf(m.mod.smoothing_alpha - 0.0f) >= 0.0005f) {
+    cJSON_AddNumberToObject(obj, "smoothing_alpha", m.mod.smoothing_alpha);
+  }
+
+  if (fabsf(m.mod.bezier_p1x - 0.25f) >= 0.0005f ||
+      fabsf(m.mod.bezier_p1y - 0.25f) >= 0.0005f ||
+      fabsf(m.mod.bezier_p2x - 0.75f) >= 0.0005f ||
+      fabsf(m.mod.bezier_p2y - 0.75f) >= 0.0005f) {
+    cJSON *curve = cJSON_AddObjectToObject(obj, "curve");
+    cJSON_AddStringToObject(curve, "type", "bezier");
+    cJSON *p1 = cJSON_AddObjectToObject(curve, "p1");
+    cJSON_AddNumberToObject(p1, "x", m.mod.bezier_p1x);
+    cJSON_AddNumberToObject(p1, "y", m.mod.bezier_p1y);
+    cJSON *p2 = cJSON_AddObjectToObject(curve, "p2");
+    cJSON_AddNumberToObject(p2, "x", m.mod.bezier_p2x);
+    cJSON_AddNumberToObject(p2, "y", m.mod.bezier_p2y);
+  }
+
   return obj;
 }
 
@@ -530,11 +559,16 @@ std::string mapping_engine_profile_to_json() {
 
   cJSON *root = cJSON_CreateObject();
   cJSON_AddNumberToObject(root, "version", 2);
-  cJSON_AddBoolToObject(root, "buttons_or_combine", g_profile.buttons_or_combine);
+  if (g_profile.buttons_or_combine != true) {
+    cJSON_AddBoolToObject(root, "buttons_or_combine", g_profile.buttons_or_combine);
+  }
+
   cJSON *axes = cJSON_AddObjectToObject(root, "axes");
   for (size_t i = 0; i < (size_t)OutputAxis::COUNT; i++) {
+    const AxisMapping &mapping = g_profile.axes[i];
+    if (!mapping.configured) continue;
     OutputAxis axis = (OutputAxis)i;
-    cJSON_AddItemToObject(axes, axis_name(axis), axis_mapping_to_json(g_profile.axes[i]));
+    cJSON_AddItemToObject(axes, axis_name(axis), axis_mapping_to_json(mapping));
   }
 
   char *printed = cJSON_PrintUnformatted(root);
