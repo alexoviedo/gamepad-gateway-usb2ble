@@ -1,0 +1,166 @@
+name: Promote PR Artifacts
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "promote-pr-artifacts-main"
+  cancel-in-progress: true
+
+jobs:
+  resolve-pr-build:
+    runs-on: ubuntu-latest
+    outputs:
+      has_pr: ${{ steps.resolve.outputs.has_pr }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      run_id: ${{ steps.resolve.outputs.run_id }}
+      firmware: ${{ steps.manifest.outputs.firmware }}
+      webapp: ${{ steps.manifest.outputs.webapp }}
+    steps:
+      - name: Resolve merged PR and successful PR build
+        id: resolve
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const commitSha = context.sha;
+
+            const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: commitSha,
+            });
+
+            const mergedPr = associated.data.find((pr) =>
+              pr.base?.ref === 'main' && pr.state === 'closed' && pr.merged_at
+            );
+
+            if (!mergedPr) {
+              core.notice(`No merged pull request is associated with commit ${commitSha}.`);
+              core.setOutput('has_pr', 'false');
+              return;
+            }
+
+            core.setOutput('has_pr', 'true');
+            core.setOutput('pr_number', String(mergedPr.number));
+            core.setOutput('head_sha', mergedPr.head.sha);
+
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner,
+              repo,
+              event: 'pull_request',
+              head_sha: mergedPr.head.sha,
+              status: 'completed',
+              per_page: 100,
+            });
+
+            const run = runs.find((candidate) =>
+              candidate.name === 'PR Artifact Build' &&
+              candidate.conclusion === 'success' &&
+              Array.isArray(candidate.pull_requests) &&
+              candidate.pull_requests.some((pr) => pr.number === mergedPr.number)
+            );
+
+            if (!run) {
+              core.setFailed(
+                `Could not find a successful "PR Artifact Build" run for PR #${mergedPr.number} at ${mergedPr.head.sha}.`
+              );
+              return;
+            }
+
+            core.setOutput('run_id', String(run.id));
+
+      - name: Download PR build manifest
+        if: ${{ steps.resolve.outputs.has_pr == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.resolve.outputs.run_id }}
+          name: pr-build-metadata
+          path: restored/metadata
+
+      - name: Read PR build manifest
+        if: ${{ steps.resolve.outputs.has_pr == 'true' }}
+        id: manifest
+        run: |
+          manifest="restored/metadata/manifest.json"
+          test -f "$manifest"
+          echo "firmware=$(jq -r '.components.firmware' "$manifest")" >> "$GITHUB_OUTPUT"
+          echo "webapp=$(jq -r '.components.webapp' "$manifest")" >> "$GITHUB_OUTPUT"
+
+  promote-firmware:
+    needs: resolve-pr-build
+    if: ${{ needs.resolve-pr-build.outputs.has_pr == 'true' && needs.resolve-pr-build.outputs.firmware == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download firmware artifact from PR build
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve-pr-build.outputs.run_id }}
+          name: firmware-build
+          path: restored/firmware
+
+      - name: Upload promoted firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-build-${{ needs.resolve-pr-build.outputs.head_sha }}
+          path: restored/firmware/firmware-build.tgz
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy-webapp:
+    needs: resolve-pr-build
+    if: ${{ needs.resolve-pr-build.outputs.has_pr == 'true' && needs.resolve-pr-build.outputs.webapp == 'true' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download webapp artifact from PR build
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve-pr-build.outputs.run_id }}
+          name: webapp-pages
+          path: restored/webapp-download
+
+      - name: Extract webapp artifact
+        run: |
+          mkdir -p restored/webapp
+          tar -xzf restored/webapp-download/webapp-pages.tgz -C restored/webapp
+          test -f restored/webapp/index.html
+
+      - name: Upload promoted webapp artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webapp-pages-${{ needs.resolve-pr-build.outputs.head_sha }}
+          path: restored/webapp-download/webapp-pages.tgz
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: restored/webapp
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
