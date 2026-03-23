@@ -5,9 +5,7 @@
   "scripts": {
     "typecheck:web": "tsc -p tsconfig.web.json --pretty false",
     "lint:web": "eslint webapp/**/*.js",
-    "check:web": "npm run typecheck:web && npm run lint:web",
-    "build:web": "rm -rf webapp/dist && mkdir -p webapp/dist && rsync -a --delete --exclude '.DS_Store' webapp/ webapp/dist/ && touch webapp/dist/.nojekyll",
-    "build": "npm run build:web"
+    "check:web": "npm run typecheck:web && npm run lint:web"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",

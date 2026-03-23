@@ -58,7 +58,6 @@ jobs:
               owner,
               repo,
               event: 'pull_request',
-              head_sha: mergedPr.head.sha,
               status: 'completed',
               per_page: 100,
             });
