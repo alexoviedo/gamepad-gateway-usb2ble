@@ -292,12 +292,9 @@ static void cmd_stop_stream(cJSON *resp) {
 
 static void cmd_get_config(cJSON *resp) {
   g_config_json = mapping::mapping_engine_profile_to_json();
-  cJSON *cfg = cJSON_Parse(g_config_json.c_str());
-  if (cfg) {
-    cJSON_AddItemToObject(resp, "config", cfg);
-  } else {
-    cJSON_AddStringToObject(resp, "config_json", g_config_json.c_str());
-  }
+  cJSON_AddBoolToObject(resp, "ok", true);
+  cJSON_AddNumberToObject(resp, "config_len", (double)g_config_json.size());
+  cJSON_AddStringToObject(resp, "transport", "cfg_read");
 }
 
 static void cmd_set_config(cJSON *req, cJSON *resp) {
