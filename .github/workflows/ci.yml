@@ -1,18 +1,15 @@
-name: CI/CD Pipeline
+name: PR Artifact Build
 
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.ref }}"
+  group: "pr-artifact-build-${{ github.event.pull_request.number }}"
   cancel-in-progress: true
 
 jobs:
@@ -23,6 +20,7 @@ jobs:
       webapp: ${{ steps.filter.outputs.webapp }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -40,7 +38,36 @@ jobs:
               - 'package.json'
               - 'package-lock.json'
               - 'tsconfig.web.json'
+              - 'eslint.config.js'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/promote-artifacts.yml'
+
+  build-metadata:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write PR build manifest
+        run: |
+          mkdir -p out/metadata
+          cat > out/metadata/manifest.json <<JSON
+          {
+            "pr_number": ${{ github.event.pull_request.number }},
+            "head_sha": "${{ github.event.pull_request.head.sha }}",
+            "base_sha": "${{ github.event.pull_request.base.sha }}",
+            "components": {
+              "firmware": ${{ needs.detect-changes.outputs.firmware }},
+              "webapp": ${{ needs.detect-changes.outputs.webapp }}
+            }
+          }
+          JSON
+
+      - name: Upload PR build manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-build-metadata
+          path: out/metadata/manifest.json
+          if-no-files-found: error
+          retention-days: 14
 
   build-firmware:
     needs: detect-changes
@@ -51,31 +78,35 @@ jobs:
         with:
           submodules: recursive
 
-      - name: esp-idf build
+      - name: Build firmware
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.5.3
           target: esp32s3
-          path: '.'
-          command: 'idf.py build'
+          path: .
+          command: idf.py build
 
-      - name: Upload artifacts
+      - name: Package firmware artifact
+        run: |
+          mkdir -p out/firmware
+          cp build/bootloader/bootloader.bin out/firmware/
+          cp build/partition_table/partition-table.bin out/firmware/
+          cp build/hotas_ble.bin out/firmware/
+          cp build/hotas_ble.elf out/firmware/
+          cp build/flasher_args.json out/firmware/
+          tar -C out/firmware -czf out/firmware-build.tgz .
+
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware
-          path: |
-            build/bootloader/bootloader.bin
-            build/partition_table/partition-table.bin
-            build/hotas_ble.bin
-            build/hotas_ble.elf
-            build/flasher_args.json
+          name: firmware-build
+          path: out/firmware-build.tgz
+          if-no-files-found: error
+          retention-days: 14
 
   build-webapp:
-    needs: [detect-changes, build-firmware]
-    if: |
-      always() &&
-      needs.detect-changes.outputs.webapp == 'true' &&
-      (needs.build-firmware.result == 'success' || needs.build-firmware.result == 'skipped')
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.webapp == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,33 +114,26 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Check web app (typecheck + lint)
+      - name: Check web app
         run: npm run check:web
 
-      - name: Setup Pages
-        if: github.ref == 'refs/heads/main'
-        uses: actions/configure-pages@v5
+      - name: Package webapp artifact
+        run: |
+          mkdir -p out/site
+          rsync -a --delete --exclude '.DS_Store' webapp/ out/site/
+          touch out/site/.nojekyll
+          tar -C out/site -czf out/webapp-pages.tgz .
 
-      - name: Upload artifact
-        if: github.ref == 'refs/heads/main'
-        uses: actions/upload-pages-artifact@v3
+      - name: Upload webapp artifact
+        uses: actions/upload-artifact@v4
         with:
-          path: 'webapp'
-
-  deploy-webapp:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build-webapp
-    if: ${{ github.ref == 'refs/heads/main' && needs.build-webapp.result == 'success' }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          name: webapp-pages
+          path: out/webapp-pages.tgz
+          if-no-files-found: error
+          retention-days: 14
