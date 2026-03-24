@@ -2,7 +2,6 @@
 
 #include <string.h>
 
-// Local FNV-1a (32-bit)
 static uint32_t fnv1a32(const void *data, size_t len) {
   const uint8_t *p = (const uint8_t *)data;
   uint32_t h = 2166136261u;
@@ -27,70 +26,40 @@ const char *ie_kind_str(InputElementKind k) {
 }
 
 InputElementKind ie_guess_kind(uint16_t usage_page, uint16_t usage) {
-  // Buttons usage page
   if (usage_page == 0x09) return InputElementKind::BUTTON;
-
-  // Generic Desktop hat
   if (usage_page == 0x01 && usage == 0x39) return InputElementKind::HAT;
-
-  // Generic Desktop axes 0x30..0x38
   if (usage_page == 0x01 && usage >= 0x30 && usage <= 0x38) return InputElementKind::AXIS;
-
-  // Simulation controls (rudder/throttle/etc)
   if (usage_page == 0x02) return InputElementKind::AXIS;
-
   return InputElementKind::OTHER;
 }
 
 const char *ie_friendly_usage(uint16_t usage_page, uint16_t usage) {
-  // Generic Desktop Page (0x01)
   if (usage_page == 0x01) {
     switch (usage) {
-    case 0x30:
-      return "X";
-    case 0x31:
-      return "Y";
-    case 0x32:
-      return "Z";
-    case 0x33:
-      return "Rx";
-    case 0x34:
-      return "Ry";
-    case 0x35:
-      return "Rz";
-    case 0x36:
-      return "Slider";
-    case 0x37:
-      return "Dial";
-    case 0x38:
-      return "Wheel";
-    case 0x39:
-      return "Hat";
-    default:
-      break;
+    case 0x30: return "X";
+    case 0x31: return "Y";
+    case 0x32: return "Z";
+    case 0x33: return "Rx";
+    case 0x34: return "Ry";
+    case 0x35: return "Rz";
+    case 0x36: return "Slider";
+    case 0x37: return "Dial";
+    case 0x38: return "Wheel";
+    case 0x39: return "Hat";
+    default: break;
     }
   }
 
-  // Simulation Controls Page (0x02)
   if (usage_page == 0x02) {
     switch (usage) {
-    case 0xBA:
-      return "Rudder";
-    case 0xBB:
-      return "Throttle";
-    case 0xBF:
-      return "ToeBrake";
-    default:
-      break;
+    case 0xBA: return "Rudder";
+    case 0xBB: return "Throttle";
+    case 0xBF: return "ToeBrake";
+    default: break;
     }
   }
 
-  // Buttons page (0x09)
-  if (usage_page == 0x09) {
-    // Don't allocate; caller can print numeric usage.
-    return "Button";
-  }
-
+  if (usage_page == 0x09) return "Button";
   return nullptr;
 }
 
@@ -121,26 +90,28 @@ uint32_t ie_compute_id(uint16_t usage_page, uint16_t usage, uint8_t report_id,
 }
 
 static uint32_t extract_bits_le(const uint8_t *data, uint32_t bit_offset, uint32_t bit_size) {
-  uint32_t value = 0;
+  if (!data || bit_size == 0) return 0;
+  if (bit_size > 32) bit_size = 32;
+
+  uint64_t value = 0;
   for (uint32_t i = 0; i < bit_size; i++) {
-    uint32_t byte_index = (bit_offset + i) / 8;
-    uint32_t bit_index = (bit_offset + i) % 8;
-    uint8_t bit = (data[byte_index] >> bit_index) & 0x01;
-    value |= (uint32_t)bit << i;
+    const uint32_t byte_index = (bit_offset + i) / 8;
+    const uint32_t bit_index = (bit_offset + i) % 8;
+    const uint8_t bit = (data[byte_index] >> bit_index) & 0x01;
+    value |= (uint64_t)bit << i;
   }
-  return value;
+  return (uint32_t)value;
 }
 
 static int32_t sign_extend(uint32_t v, uint32_t bits) {
   if (bits == 0 || bits >= 32) return (int32_t)v;
-  uint32_t m = 1u << (bits - 1);
-  uint32_t mask = (1u << bits) - 1u;
+  const uint32_t m = 1u << (bits - 1);
+  const uint32_t mask = (1u << bits) - 1u;
   v &= mask;
   return (int32_t)((v ^ m) - m);
 }
 
 static void normalize_element(InputElement *e) {
-  // Default
   e->norm_0_1 = 0.0f;
   e->norm_m1_1 = 0.0f;
 
@@ -148,8 +119,6 @@ static void normalize_element(InputElement *e) {
   int32_t maxv = e->logical_max;
   if (maxv == minv) return;
 
-  // Clamp for absolute controls; relative controls may legitimately exceed
-  // logical range on some devices, but clamping is still useful for display.
   int32_t rv = e->raw;
   if (rv < minv) rv = minv;
   if (rv > maxv) rv = maxv;
@@ -167,7 +136,6 @@ void input_elements_decode_report(InputElement *elements, size_t n,
                                   uint32_t now_ms) {
   if (!elements || n == 0 || !report || len == 0) return;
 
-  // Determine whether any element uses report IDs.
   bool uses_report_ids = false;
   for (size_t i = 0; i < n; i++) {
     if (elements[i].report_id > 0) {
@@ -186,13 +154,11 @@ void input_elements_decode_report(InputElement *elements, size_t n,
   }
   if (payload_len == 0) return;
 
-  // Decode all matching elements.
   for (size_t i = 0; i < n; i++) {
     InputElement *e = &elements[i];
     if (uses_report_ids && e->report_id != report_id) continue;
     if (e->bit_size == 0) continue;
 
-    // Bounds check (bit_offset is relative to payload)
     uint32_t last_bit = (uint32_t)e->bit_offset + (uint32_t)e->bit_size;
     uint32_t payload_bits = (uint32_t)payload_len * 8u;
     if (last_bit > payload_bits) continue;

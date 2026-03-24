@@ -3,8 +3,10 @@
 #include "input_elements.h"
 #include "mapping_engine.h"
 #include "nvs_profile_store.h"
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <string.h>
@@ -13,10 +15,56 @@
 
 static const char *TAG = "HID_MGR";
 
-#define MAX_DEVICES 8
+static constexpr int MAX_DEVICES = 8;
+static constexpr size_t kMergedStateQueueLen = 8;
+static constexpr size_t kMinReportDescBytes = HidDeviceContext::MIN_HID_REPORT_DESC_LEN;
+static constexpr size_t kMaxRawInputReportBytes = 1024;
+static constexpr UBaseType_t kUsbHidTaskPriority = 4;
+static constexpr BaseType_t kUsbHidTaskCore = 1;
+
 static HidDeviceContext g_devices[MAX_DEVICES];
 static SemaphoreHandle_t g_state_mutex = nullptr;
+static QueueHandle_t g_state_queue = nullptr;
 static GamepadState g_merged_state = {0, 0, 0, 0, 0, 0, 0, 0, HatDirection::CENTER, 0};
+
+static void publish_state_nonblocking(const GamepadState *state) {
+  if (!state || !g_state_queue) return;
+  if (xQueueSendToBack(g_state_queue, state, 0) == pdPASS) return;
+
+  GamepadState dropped = {};
+  (void)xQueueReceive(g_state_queue, &dropped, 0);
+  (void)xQueueSendToBack(g_state_queue, state, 0);
+}
+
+static void free_device_buffers(HidDeviceContext *ctx) {
+  if (!ctx) return;
+  if (ctx->report_desc) {
+    heap_caps_free(ctx->report_desc);
+    ctx->report_desc = nullptr;
+  }
+  ctx->report_desc_capacity = 0;
+  ctx->report_desc_len = 0;
+}
+
+static bool ensure_report_desc_capacity(HidDeviceContext *ctx, size_t required_len) {
+  if (!ctx) return false;
+  const size_t target = (required_len > kMinReportDescBytes) ? required_len : kMinReportDescBytes;
+  if (ctx->report_desc && ctx->report_desc_capacity >= target) return true;
+
+  uint8_t *next = static_cast<uint8_t *>(heap_caps_malloc(target, MALLOC_CAP_DMA | MALLOC_CAP_8BIT));
+  if (!next) {
+    ESP_LOGE(TAG, "Failed to allocate %u-byte DMA-capable descriptor buffer", (unsigned)target);
+    return false;
+  }
+
+  if (ctx->report_desc && ctx->report_desc_len > 0) {
+    memcpy(next, ctx->report_desc, ctx->report_desc_len);
+  }
+  free_device_buffers(ctx);
+  ctx->report_desc = next;
+  ctx->report_desc_capacity = target;
+  return true;
+}
 
 static void print_device_caps(const HidDeviceContext *ctx) {
   ESP_LOGI(TAG, "Device registered. Role=%d Elements=%d", (int)ctx->caps.role,
@@ -25,10 +73,8 @@ static void print_device_caps(const HidDeviceContext *ctx) {
     const InputElement &e = ctx->caps.elements[i];
     const char *friendly = ie_friendly_usage(e.usage_page, e.usage);
     if (friendly && e.usage_page == 0x09) {
-      // Buttons share the same friendly label; include the number
       ESP_LOGI(TAG,
-               " E[%03d]: id=%08X kind=%s usage=%s#%u up=%04X u=%04X rid=%u "
-               "bit_ofs=%u bit_sz=%u lmin=%d lmax=%d signed=%d rel=%d var=%d",
+               " E[%03d]: id=%08X kind=%s usage=%s#%u up=%04X u=%04X rid=%u bit_ofs=%u bit_sz=%u lmin=%d lmax=%d signed=%d rel=%d var=%d",
                (int)i, (unsigned)e.element_id, ie_kind_str(e.kind), friendly,
                (unsigned)e.usage, e.usage_page, e.usage, (unsigned)e.report_id,
                (unsigned)e.bit_offset, (unsigned)e.bit_size, (int)e.logical_min,
@@ -36,8 +82,7 @@ static void print_device_caps(const HidDeviceContext *ctx) {
                (int)e.is_variable);
     } else if (friendly) {
       ESP_LOGI(TAG,
-               " E[%03d]: id=%08X kind=%s usage=%s up=%04X u=%04X rid=%u "
-               "bit_ofs=%u bit_sz=%u lmin=%d lmax=%d signed=%d rel=%d var=%d",
+               " E[%03d]: id=%08X kind=%s usage=%s up=%04X u=%04X rid=%u bit_ofs=%u bit_sz=%u lmin=%d lmax=%d signed=%d rel=%d var=%d",
                (int)i, (unsigned)e.element_id, ie_kind_str(e.kind), friendly,
                e.usage_page, e.usage, (unsigned)e.report_id,
                (unsigned)e.bit_offset, (unsigned)e.bit_size, (int)e.logical_min,
@@ -45,8 +90,7 @@ static void print_device_caps(const HidDeviceContext *ctx) {
                (int)e.is_variable);
     } else {
       ESP_LOGI(TAG,
-               " E[%03d]: id=%08X kind=%s up=%04X u=%04X rid=%u bit_ofs=%u "
-               "bit_sz=%u lmin=%d lmax=%d signed=%d rel=%d var=%d",
+               " E[%03d]: id=%08X kind=%s up=%04X u=%04X rid=%u bit_ofs=%u bit_sz=%u lmin=%d lmax=%d signed=%d rel=%d var=%d",
                (int)i, (unsigned)e.element_id, ie_kind_str(e.kind),
                e.usage_page, e.usage, (unsigned)e.report_id,
                (unsigned)e.bit_offset, (unsigned)e.bit_size, (int)e.logical_min,
@@ -56,14 +100,11 @@ static void print_device_caps(const HidDeviceContext *ctx) {
   }
 }
 
-// Optional: periodically log element changes so you can visually confirm
-// *all* physical controls are producing updates (including unknown usages).
 static void log_element_samples(HidDeviceContext *ctx) {
   if (!ctx) return;
   uint32_t now = ctx->last_report_ms;
   if (now == 0) return;
 
-  // Rate limit per device to avoid log spam.
   const uint32_t kMinIntervalMs = 500;
   if (ctx->last_sample_log_ms != 0 && (now - ctx->last_sample_log_ms) < kMinIntervalMs)
     return;
@@ -72,7 +113,6 @@ static void log_element_samples(HidDeviceContext *ctx) {
   const int kMaxPrint = 12;
   for (size_t i = 0; i < ctx->caps.num_elements && printed < kMaxPrint; i++) {
     const InputElement &e = ctx->caps.elements[i];
-    // Print elements updated since the last sample window
     if (e.last_update_ms == 0) continue;
     if (ctx->last_sample_log_ms != 0 && e.last_update_ms <= ctx->last_sample_log_ms)
       continue;
@@ -97,14 +137,18 @@ static void log_element_samples(HidDeviceContext *ctx) {
     printed++;
   }
 
-  // Only advance the window if we printed at least one update.
   if (printed > 0) ctx->last_sample_log_ms = now;
 }
 
-static void
-hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
-                            const hid_host_interface_event_t event, void *arg) {
-  // Find context
+static void recompute_and_publish_locked() {
+  mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
+  GamepadState snapshot = g_merged_state;
+  xSemaphoreGive(g_state_mutex);
+  publish_state_nonblocking(&snapshot);
+}
+
+static void hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
+                                        const hid_host_interface_event_t event, void *arg) {
   int ctx_idx = -1;
   for (int i = 0; i < MAX_DEVICES; i++) {
     if (g_devices[i].active &&
@@ -116,30 +160,28 @@ hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
 
   if (event == HID_HOST_INTERFACE_EVENT_INPUT_REPORT) {
     size_t report_length = 0;
-    uint8_t report_data[128];
+    uint8_t report_data[kMaxRawInputReportBytes];
     esp_err_t err = hid_host_device_get_raw_input_report_data(
         hid_device_handle, report_data, sizeof(report_data), &report_length);
     if (err == ESP_OK && ctx_idx >= 0) {
       xSemaphoreTake(g_state_mutex, portMAX_DELAY);
       hid_decode_report(report_data, report_length, &g_devices[ctx_idx]);
       log_element_samples(&g_devices[ctx_idx]);
-      // Deterministic mapping (replaces the legacy per-axis max-abs merge).
-      mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
-      xSemaphoreGive(g_state_mutex);
+      recompute_and_publish_locked();
     }
   } else if (event == HID_HOST_INTERFACE_EVENT_DISCONNECTED) {
     ESP_LOGI(TAG, "Interface Disconnected");
     if (ctx_idx >= 0) {
       xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+      free_device_buffers(&g_devices[ctx_idx]);
       g_devices[ctx_idx].active = false;
-      // caps.elements is a fixed-size array; memset(caps) already clears all element values.
       memset(&g_devices[ctx_idx].caps, 0, sizeof(g_devices[ctx_idx].caps));
       memset(&g_devices[ctx_idx].state, 0, sizeof(g_devices[ctx_idx].state));
-      g_devices[ctx_idx].report_desc_len = 0;
+      g_devices[ctx_idx].last_report_ms = 0;
+      g_devices[ctx_idx].last_sample_log_ms = 0;
 
       mapping::mapping_engine_notify_devices_changed();
-      mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
-      xSemaphoreGive(g_state_mutex);
+      recompute_and_publish_locked();
     }
     hid_host_device_close(hid_device_handle);
   } else if (event == HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR) {
@@ -159,11 +201,8 @@ static void hid_init_device_task(void *arg) {
     return;
   }
 
-  // Some devices behind USB Hubs need extra time to process control requests
-  // after enumeration
   vTaskDelay(pdMS_TO_TICKS(200));
 
-  // Fetch descriptor
   size_t desc_len = 0;
   uint8_t *desc = hid_host_get_report_descriptor(hid_device_handle, &desc_len);
   if (desc) {
@@ -178,14 +217,13 @@ static void hid_init_device_task(void *arg) {
       }
     }
     if (slot >= 0) {
-      // Parse it!
       memset(&g_devices[slot], 0, sizeof(HidDeviceContext));
 
-      // Cache raw report descriptor for WebBLE inspection.
-      const size_t max_desc = HidDeviceContext::MAX_HID_REPORT_DESC_LEN;
-      g_devices[slot].report_desc_len = (uint16_t)((desc_len > max_desc) ? max_desc : desc_len);
-      if (g_devices[slot].report_desc_len > 0) {
-        memcpy(g_devices[slot].report_desc, desc, g_devices[slot].report_desc_len);
+      if (ensure_report_desc_capacity(&g_devices[slot], desc_len)) {
+        g_devices[slot].report_desc_len = (uint16_t)((desc_len > 0xFFFFu) ? 0xFFFFu : desc_len);
+        if (g_devices[slot].report_desc_len > 0) {
+          memcpy(g_devices[slot].report_desc, desc, g_devices[slot].report_desc_len);
+        }
       }
 
       hid_parse_report_descriptor(desc, desc_len, &g_devices[slot].caps);
@@ -194,17 +232,15 @@ static void hid_init_device_task(void *arg) {
 
       print_device_caps(&g_devices[slot]);
 
-      // New device set -> rebuild deterministic mapping.
       mapping::mapping_engine_notify_devices_changed();
-      mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
+      recompute_and_publish_locked();
+    } else {
+      xSemaphoreGive(g_state_mutex);
+      ESP_LOGW(TAG, "No free HID device slots available");
     }
-    xSemaphoreGive(g_state_mutex);
   }
 
-  // Now that the device is fully parsed and activated, let's start pulling
-  // reports!
   hid_host_device_start(hid_device_handle);
-
   vTaskDelete(nullptr);
 }
 
@@ -213,13 +249,15 @@ static void hid_host_driver_event_cb(hid_host_device_handle_t hid_device_handle,
                                      void *arg) {
   if (event == HID_HOST_DRIVER_EVENT_CONNECTED) {
     ESP_LOGI(TAG, "HID Device Connected");
-    xTaskCreate(hid_init_device_task, "hid_init_dev", 8192,
-                (void *)hid_device_handle, 5, nullptr);
+    xTaskCreatePinnedToCore(hid_init_device_task, "hid_init_dev", 8192,
+                            (void *)hid_device_handle, kUsbHidTaskPriority, nullptr,
+                            kUsbHidTaskCore);
   }
 }
 
 void hid_device_manager_init(void) {
   g_state_mutex = xSemaphoreCreateMutex();
+  g_state_queue = xQueueCreate(kMergedStateQueueLen, sizeof(GamepadState));
   memset(g_devices, 0, sizeof(g_devices));
   memset(&g_merged_state, 0, sizeof(g_merged_state));
   mapping::mapping_engine_init();
@@ -241,26 +279,26 @@ void hid_device_manager_init(void) {
   }
 
   hid_host_driver_config_t driver_config = {.create_background_task = true,
-                                            .task_priority = 5,
+                                            .task_priority = kUsbHidTaskPriority,
                                             .stack_size = 8192,
-                                            .core_id = tskNO_AFFINITY,
-                                            .callback =
-                                                hid_host_driver_event_cb,
+                                            .core_id = kUsbHidTaskCore,
+                                            .callback = hid_host_driver_event_cb,
                                             .callback_arg = nullptr};
   esp_err_t err = hid_host_install(&driver_config);
   if (err == ESP_OK) {
-    ESP_LOGI(TAG, "HID Class Driver installed");
+    ESP_LOGI(TAG, "HID Class Driver installed on core %d", (int)kUsbHidTaskCore);
   } else {
     ESP_LOGE(TAG, "Failed to install HID Class Driver: %s",
              esp_err_to_name(err));
   }
+
+  publish_state_nonblocking(&g_merged_state);
 }
 
 void hid_device_manager_recompute_mapping(void) {
   if (!g_state_mutex) return;
   xSemaphoreTake(g_state_mutex, portMAX_DELAY);
-  mapping::mapping_engine_compute(g_devices, MAX_DEVICES, &g_merged_state);
-  xSemaphoreGive(g_state_mutex);
+  recompute_and_publish_locked();
 }
 
 void hid_device_manager_get_merged_state(struct GamepadState *out_state) {
@@ -270,12 +308,12 @@ void hid_device_manager_get_merged_state(struct GamepadState *out_state) {
   xSemaphoreGive(g_state_mutex);
 }
 
-// -----------------------------------------------------------------------------
-// WebBLE / Config Introspection
-// -----------------------------------------------------------------------------
+bool hid_device_manager_wait_for_next_state_ticks(struct GamepadState *out_state, TickType_t timeout_ticks) {
+  if (!out_state || !g_state_queue) return false;
+  return xQueueReceive(g_state_queue, out_state, timeout_ticks) == pdPASS;
+}
 
 static inline uint32_t make_device_id_from_ctx(const HidDeviceContext &ctx) {
-  // Reserve 0 as invalid.
   return (uint32_t)ctx.dev_addr + 1;
 }
 
@@ -310,7 +348,7 @@ size_t hid_device_manager_get_report_descriptor(uint32_t device_id, uint8_t *out
   size_t copied = 0;
   xSemaphoreTake(g_state_mutex, portMAX_DELAY);
   HidDeviceContext *ctx = find_device_by_id(device_id);
-  if (ctx && ctx->report_desc_len > 0) {
+  if (ctx && ctx->report_desc && ctx->report_desc_len > 0) {
     copied = (ctx->report_desc_len > max_len) ? max_len : (size_t)ctx->report_desc_len;
     memcpy(out_buf, ctx->report_desc, copied);
   }

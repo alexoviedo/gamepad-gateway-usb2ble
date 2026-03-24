@@ -9,6 +9,9 @@
 static const char *TAG = "USB_HOST_MGR";
 static usb_phy_handle_t phy_hdl = nullptr;
 
+static constexpr UBaseType_t kUsbHostDaemonPriority = 4;
+static constexpr BaseType_t kUsbHostDaemonCore = 1;
+
 static void usb_host_lib_daemon_task(void *arg) {
   bool has_clients = true;
   bool has_devices = true;
@@ -60,7 +63,7 @@ void usb_host_manager_init(void) {
     return;
   }
 
-  // Start daemon task
-  xTaskCreate(usb_host_lib_daemon_task, "usb_events", 4096, nullptr, 5, nullptr);
-  ESP_LOGI(TAG, "USB Host initialized and daemon started.");
+  xTaskCreatePinnedToCore(usb_host_lib_daemon_task, "usb_events", 4096, nullptr,
+                          kUsbHostDaemonPriority, nullptr, kUsbHostDaemonCore);
+  ESP_LOGI(TAG, "USB Host initialized and daemon started on core %d.", (int)kUsbHostDaemonCore);
 }
