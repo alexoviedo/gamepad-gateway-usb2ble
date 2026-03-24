@@ -5,6 +5,8 @@
 
 #include <esp_err.h>
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <nvs.h>
 #include <nvs_flash.h>
 
@@ -41,6 +43,16 @@ static bool g_is_config_mode = false;
 // Bluetooth SIG Appearance: Gamepad = 0x03C4.
 static constexpr uint16_t kAppearanceHidGamepad = 0x03C4;
 
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+static constexpr BaseType_t kBleTaskCore = 0;
+#else
+static constexpr BaseType_t kBleTaskCore = tskNO_AFFINITY;
+#endif
+
+static constexpr UBaseType_t kNimbleHostTaskPriority = 7;
+static constexpr uint32_t kNimbleHostTaskStackBytes = 6144;
+static constexpr int16_t kAnalogNotifyThreshold = 256;
+
 // --------------------------
 // HID report format
 // --------------------------
@@ -50,7 +62,23 @@ static constexpr uint8_t kReportIdGamepad = 0x03;
 static constexpr uint8_t kReportTypeInput = 0x01; // HOGP: 1=input
 static constexpr size_t kInputReportSize = 21;
 
+struct __attribute__((packed)) HidInputReport {
+  uint32_t buttons;
+  uint16_t x;
+  uint16_t y;
+  uint16_t z;
+  uint16_t rz;
+  uint16_t rx;
+  uint16_t ry;
+  uint16_t slider1;
+  uint16_t slider2;
+  uint8_t hat;
+};
+static_assert(sizeof(HidInputReport) == kInputReportSize, "HID input report size must remain 21 bytes");
+
 static uint8_t g_last_report[kInputReportSize] = {0};
+static GamepadState g_last_sent_state = {0, 0, 0, 0, 0, 0, 0, 0, HatDirection::CENTER, 0};
+static bool g_has_last_sent_state = false;
 
 static inline uint16_t to_u16_axis(int16_t v) {
   int32_t t = (int32_t)v + 32768;
@@ -64,9 +92,42 @@ static inline uint8_t clamp_hat(HatDirection hat) {
   return (raw <= 8) ? raw : 0;
 }
 
-static inline void put_u16_le(uint8_t *dst, uint16_t v) {
-  dst[0] = (uint8_t)(v & 0xFF);
-  dst[1] = (uint8_t)((v >> 8) & 0xFF);
+static inline int16_t clamp_slider(int16_t v) {
+  if (v < 0) return 0;
+  if (v > 32767) return 32767;
+  return v;
+}
+
+static inline int16_t apply_hysteresis(int16_t candidate, int16_t previous) {
+  int32_t delta = (int32_t)candidate - (int32_t)previous;
+  if (delta < 0) delta = -delta;
+  return (delta >= kAnalogNotifyThreshold) ? candidate : previous;
+}
+
+static GamepadState filter_state_for_tx(const GamepadState &candidate) {
+  if (!g_has_last_sent_state) {
+    GamepadState seeded = candidate;
+    seeded.slider1 = clamp_slider(seeded.slider1);
+    seeded.slider2 = clamp_slider(seeded.slider2);
+    return seeded;
+  }
+
+  GamepadState filtered = candidate;
+  filtered.x = apply_hysteresis(candidate.x, g_last_sent_state.x);
+  filtered.y = apply_hysteresis(candidate.y, g_last_sent_state.y);
+  filtered.z = apply_hysteresis(candidate.z, g_last_sent_state.z);
+  filtered.rx = apply_hysteresis(candidate.rx, g_last_sent_state.rx);
+  filtered.ry = apply_hysteresis(candidate.ry, g_last_sent_state.ry);
+  filtered.rz = apply_hysteresis(candidate.rz, g_last_sent_state.rz);
+  filtered.slider1 = clamp_slider(apply_hysteresis(candidate.slider1, g_last_sent_state.slider1));
+  filtered.slider2 = clamp_slider(apply_hysteresis(candidate.slider2, g_last_sent_state.slider2));
+  filtered.hat = candidate.hat;
+  filtered.buttons = candidate.buttons;
+  return filtered;
+}
+
+static bool states_equal(const GamepadState &a, const GamepadState &b) {
+  return memcmp(&a, &b, sizeof(GamepadState)) == 0;
 }
 
 static const uint8_t kHidReportMap[] = {
@@ -152,10 +213,10 @@ static const uint8_t kExtReportRefValue[2] = {0x0F, 0x18};
 
 // PnP ID (DIS 0x2A50)
 static const uint8_t kPnpIdValue[7] = {
-    0x02,       // Vendor ID Source (USB)
-    0x5E, 0x04, // Vendor ID (0x045E) placeholder
-    0xAD, 0xDE, // Product ID (0xDEAD) placeholder
-    0x00, 0x01  // Product Version (0x0100)
+    0x02,
+    0x5E, 0x04,
+    0xAD, 0xDE,
+    0x00, 0x01
 };
 
 static int gatt_read_bytes(struct ble_gatt_access_ctxt *ctxt, const void *data, size_t len) {
@@ -171,15 +232,15 @@ static int gatt_read_bytes(struct ble_gatt_access_ctxt *ctxt, const void *data, 
 
 static int gatt_access_dis(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt, void *) {
   const uint16_t u16 = ble_uuid_u16(ctxt->chr->uuid);
-  if (u16 == 0x2A29) { // Manufacturer Name
+  if (u16 == 0x2A29) {
     static const char kMfg[] = "Thrustmaster-Bridge";
     return gatt_read_bytes(ctxt, kMfg, sizeof(kMfg) - 1);
   }
-  if (u16 == 0x2A24) { // Model Number
+  if (u16 == 0x2A24) {
     static const char kModel[] = "HOTAS-BLE";
     return gatt_read_bytes(ctxt, kModel, sizeof(kModel) - 1);
   }
-  if (u16 == 0x2A50) { // PnP ID
+  if (u16 == 0x2A50) {
     return gatt_read_bytes(ctxt, kPnpIdValue, sizeof(kPnpIdValue));
   }
   return BLE_ATT_ERR_UNLIKELY;
@@ -195,10 +256,10 @@ static int gatt_access_battery(uint16_t, uint16_t, struct ble_gatt_access_ctxt *
 static int gatt_access_hid(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt, void *) {
   const uint16_t u16 = ble_uuid_u16(ctxt->chr->uuid);
   switch (u16) {
-  case 0x2A4B: // Report Map
+  case 0x2A4B:
     return gatt_read_bytes(ctxt, kHidReportMap, sizeof(kHidReportMap));
 
-  case 0x2A4E: // Protocol Mode
+  case 0x2A4E:
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
       return gatt_read_bytes(ctxt, &g_protocol_mode, sizeof(g_protocol_mode));
     }
@@ -212,7 +273,7 @@ static int gatt_access_hid(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt
     }
     return BLE_ATT_ERR_UNLIKELY;
 
-  case 0x2A4C: // HID Control Point
+  case 0x2A4C:
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
       uint8_t v = 0;
       int rc = ble_hs_mbuf_to_flat(ctxt->om, &v, sizeof(v), nullptr);
@@ -222,10 +283,10 @@ static int gatt_access_hid(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt
     }
     return BLE_ATT_ERR_UNLIKELY;
 
-  case 0x2A4A: // HID Information
+  case 0x2A4A:
     return gatt_read_bytes(ctxt, kHidInfoValue, sizeof(kHidInfoValue));
 
-  case 0x2A4D: // Input Report
+  case 0x2A4D:
     return gatt_read_bytes(ctxt, g_last_report, sizeof(g_last_report));
 
   default:
@@ -242,9 +303,6 @@ static int gatt_access_ext_report_ref(uint16_t, uint16_t, struct ble_gatt_access
   return gatt_read_bytes(ctxt, kExtReportRefValue, sizeof(kExtReportRefValue));
 }
 
-// ---------------------------------------------------------------------------
-// GATT database
-// ---------------------------------------------------------------------------
 static const ble_uuid16_t UUID_SVC_DEVINFO = BLE_UUID16_INIT(0x180A);
 static const ble_uuid16_t UUID_CHR_MFG_NAME = BLE_UUID16_INIT(0x2A29);
 static const ble_uuid16_t UUID_CHR_MODEL_NUM = BLE_UUID16_INIT(0x2A24);
@@ -278,7 +336,6 @@ static void build_gatt_db(void) {
   memset(g_hid_chrs, 0, sizeof(g_hid_chrs));
   memset(gatt_svr_svcs, 0, sizeof(gatt_svr_svcs));
 
-  // Device Information Service
   g_devinfo_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_MFG_NAME;
   g_devinfo_chrs[0].access_cb = gatt_access_dis;
   g_devinfo_chrs[0].flags = BLE_GATT_CHR_F_READ;
@@ -303,7 +360,6 @@ static void build_gatt_db(void) {
       ESP_LOGE(TAG, "CONFIG mode requested but ble_config_service_gatt_defs() missing/empty.");
     }
   } else {
-    // Battery Service
     g_bas_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_BATTERY_LEVEL;
     g_bas_chrs[0].access_cb = gatt_access_battery;
     g_bas_chrs[0].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
@@ -313,12 +369,10 @@ static void build_gatt_db(void) {
     gatt_svr_svcs[1].uuid = (ble_uuid_t *)&UUID_SVC_BAS;
     gatt_svr_svcs[1].characteristics = g_bas_chrs;
 
-    // HID Service
     g_hid_chrs[0].uuid = (ble_uuid_t *)&UUID_CHR_PROTOCOL_MODE;
     g_hid_chrs[0].access_cb = gatt_access_hid;
     g_hid_chrs[0].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP;
 
-    // Report Map (+ External Report Reference -> BAS)
     g_report_map_descs[0].uuid = (ble_uuid_t *)&UUID_DSC_EXT_REPORT_REF;
     g_report_map_descs[0].att_flags = BLE_ATT_F_READ;
     g_report_map_descs[0].access_cb = gatt_access_ext_report_ref;
@@ -336,7 +390,6 @@ static void build_gatt_db(void) {
     g_hid_chrs[3].access_cb = gatt_access_hid;
     g_hid_chrs[3].flags = BLE_GATT_CHR_F_WRITE_NO_RSP;
 
-    // Input Report (+ Report Reference)
     g_hid_report_descs[0].uuid = (ble_uuid_t *)&UUID_DSC_REPORT_REF;
     g_hid_report_descs[0].att_flags = BLE_ATT_F_READ;
     g_hid_report_descs[0].access_cb = gatt_access_report_ref;
@@ -353,9 +406,6 @@ static void build_gatt_db(void) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// GAP / Advertising
-// ---------------------------------------------------------------------------
 static void ble_advertise(void);
 
 static void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *) {
@@ -416,6 +466,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *) {
     g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     g_input_notify_enabled = false;
     g_battery_notify_enabled = false;
+    g_has_last_sent_state = false;
+    memset(&g_last_sent_state, 0, sizeof(g_last_sent_state));
 
     if (g_is_config_mode) {
       ble_config_service_on_disconnect();
@@ -574,7 +626,7 @@ static int load_or_create_mode_random_addr(uint8_t out_addr[6]) {
   }
 
   ble_addr_t addr;
-  int rc = ble_hs_id_gen_rnd(0, &addr); // 0 => static random identity address.
+  int rc = ble_hs_id_gen_rnd(0, &addr);
   if (rc != 0) {
     nvs_close(h);
     ESP_LOGE(TAG, "ble_hs_id_gen_rnd failed: %d", rc);
@@ -642,6 +694,7 @@ static void on_sync(void) {
 static void host_task(void *) {
   nimble_port_run();
   nimble_port_freertos_deinit();
+  vTaskDelete(nullptr);
 }
 
 static void ble_common_init(bool config_mode) {
@@ -666,7 +719,6 @@ static void ble_common_init(bool config_mode) {
 
   nimble_port_init();
 
-  // Persist bonds / CCCDs so Windows keeps the relationship stable.
   ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
   ble_store_config_init();
 
@@ -696,9 +748,6 @@ static void ble_common_init(bool config_mode) {
     return;
   }
 
-  // Keep CONFIG and RUN as distinct BLE identities. CONFIG mode does not need
-  // bonding; disabling it prevents Windows / browser-side cache pollution from
-  // the config-only GATT database. RUN mode remains bondable for stable HID use.
   ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
   ble_hs_cfg.sm_bonding = g_is_config_mode ? 0 : 1;
   ble_hs_cfg.sm_mitm = 0;
@@ -709,7 +758,14 @@ static void ble_common_init(bool config_mode) {
   ble_hs_cfg.sync_cb = on_sync;
   ble_hs_cfg.gatts_register_cb = gatt_svr_register_cb;
 
-  nimble_port_freertos_init(host_task);
+  BaseType_t created = xTaskCreatePinnedToCore(host_task, "nimble_host",
+                                               kNimbleHostTaskStackBytes, nullptr,
+                                               kNimbleHostTaskPriority, nullptr,
+                                               kBleTaskCore);
+  if (created != pdPASS) {
+    ESP_LOGE(TAG, "Failed to create NimBLE host task");
+    return;
+  }
 
   if (g_is_config_mode) {
     ESP_LOGI(TAG, "BLE CONFIG initialized (service UUID=%s)", ble_config_service_uuid_str());
@@ -731,56 +787,32 @@ void ble_config_init(void) {
 }
 
 void ble_gamepad_send_state(const GamepadState *s) {
-  if (!s) {
-    return;
-  }
-  if (g_is_config_mode) {
-    return;
-  }
-  if (!g_ble_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
-    return;
-  }
-  if (g_hid_report_handle == 0) {
-    return;
-  }
-  // Do not gate input report delivery on a local subscribe flag.
-  // For bonded hosts, NimBLE can restore CCCD state from persistent storage
-  // across reconnects / reboots without emitting a fresh SUBSCRIBE callback.
-  // When that happens, g_input_notify_enabled may remain false even though the
-  // peer is still subscribed, which causes a silent reconnect regression in
-  // Windows joy.cpl. We still track the flag for logging, but let NimBLE decide
-  // whether any connected peer is currently subscribed.
+  if (!s) return;
+  if (g_is_config_mode) return;
+  if (!g_ble_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return;
+  if (g_hid_report_handle == 0) return;
 
-  uint8_t next[kInputReportSize];
-  memset(next, 0, sizeof(next));
-
-  // Buttons (little-endian 32-bit bitfield)
-  next[0] = (uint8_t)(s->buttons & 0xFF);
-  next[1] = (uint8_t)((s->buttons >> 8) & 0xFF);
-  next[2] = (uint8_t)((s->buttons >> 16) & 0xFF);
-  next[3] = (uint8_t)((s->buttons >> 24) & 0xFF);
-
-  // ESP32-BLE-Gamepad serialization order:
-  // X, Y, Z, Rz, Rx, Ry, Slider1, Slider2
-  put_u16_le(&next[4], to_u16_axis(s->x));
-  put_u16_le(&next[6], to_u16_axis(s->y));
-  put_u16_le(&next[8], to_u16_axis(s->z));
-  put_u16_le(&next[10], to_u16_axis(s->rz));
-  put_u16_le(&next[12], to_u16_axis(s->rx));
-  put_u16_le(&next[14], to_u16_axis(s->ry));
-  put_u16_le(&next[16], to_u16_axis(s->slider1));
-  put_u16_le(&next[18], to_u16_axis(s->slider2));
-  next[20] = clamp_hat(s->hat);
-
-  if (!g_force_send_once && memcmp(next, g_last_report, sizeof(next)) == 0) {
+  const GamepadState filtered = filter_state_for_tx(*s);
+  if (!g_force_send_once && g_has_last_sent_state && states_equal(filtered, g_last_sent_state)) {
     return;
   }
 
+  HidInputReport report = {};
+  report.buttons = filtered.buttons;
+  report.x = to_u16_axis(filtered.x);
+  report.y = to_u16_axis(filtered.y);
+  report.z = to_u16_axis(filtered.z);
+  report.rz = to_u16_axis(filtered.rz);
+  report.rx = to_u16_axis(filtered.rx);
+  report.ry = to_u16_axis(filtered.ry);
+  report.slider1 = to_u16_axis(filtered.slider1);
+  report.slider2 = to_u16_axis(filtered.slider2);
+  report.hat = clamp_hat(filtered.hat);
+
+  memcpy(g_last_report, &report, sizeof(report));
+  g_last_sent_state = filtered;
+  g_has_last_sent_state = true;
   g_force_send_once = false;
-  memcpy(g_last_report, next, sizeof(g_last_report));
 
-  // Ask NimBLE to notify any connected peer that is currently subscribed to
-  // the HID input report characteristic. NimBLE consults its own CCCD state,
-  // including restored subscriptions for bonded peers.
   ble_gatts_chr_updated(g_hid_report_handle);
 }

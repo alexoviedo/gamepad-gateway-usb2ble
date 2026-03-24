@@ -6,17 +6,25 @@
 
 struct HidDeviceContext {
   HidDeviceCaps caps;
-  // Current decoded state from this device alone
+  // Current decoded state from this device alone.
+  // This remains available for introspection and debugging, while the canonical
+  // merged output state is produced by mapping_engine_compute().
   GamepadState state;
   bool active;
   uint8_t dev_addr; // USB device address to match disconnects (legacy)
 
   // Cached raw HID report descriptor for WebBLE configuration / inspection.
-  // NOTE: This is copied at enumeration time. If the descriptor is larger than
-  // MAX_HID_REPORT_DESC_LEN, it is truncated.
-  static constexpr size_t MAX_HID_REPORT_DESC_LEN = 1024;
+  //
+  // Current hardening policy:
+  // - descriptor storage is dynamically allocated at enumeration time
+  // - minimum allocation is 1024 bytes
+  // - allocation prefers DMA-capable memory so the cache is safe to use with
+  //   USB-host-adjacent flows if needed
+  // - report_desc_len may be smaller than report_desc_capacity
+  static constexpr size_t MIN_HID_REPORT_DESC_CAPACITY = 1024;
   uint16_t report_desc_len;
-  uint8_t report_desc[MAX_HID_REPORT_DESC_LEN];
+  uint16_t report_desc_capacity;
+  uint8_t *report_desc;
 
   // Last time any input element changed (ms since boot)
   uint32_t last_report_ms;

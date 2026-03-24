@@ -120,23 +120,28 @@ uint32_t ie_compute_id(uint16_t usage_page, uint16_t usage, uint8_t report_id,
   return fnv1a32(&k, sizeof(k));
 }
 
-static uint32_t extract_bits_le(const uint8_t *data, uint32_t bit_offset, uint32_t bit_size) {
-  uint32_t value = 0;
+static uint32_t extract_bits_le_u32(const uint8_t *data, uint32_t bit_offset, uint32_t bit_size) {
+  if (!data || bit_size == 0) return 0;
+  if (bit_size > 32) bit_size = 32;
+
+  uint64_t value = 0;
   for (uint32_t i = 0; i < bit_size; i++) {
-    uint32_t byte_index = (bit_offset + i) / 8;
-    uint32_t bit_index = (bit_offset + i) % 8;
-    uint8_t bit = (data[byte_index] >> bit_index) & 0x01;
-    value |= (uint32_t)bit << i;
+    const uint32_t absolute_bit = bit_offset + i;
+    const uint32_t byte_index = absolute_bit / 8u;
+    const uint32_t bit_index = absolute_bit % 8u;
+    const uint64_t bit = (uint64_t)((data[byte_index] >> bit_index) & 0x01u);
+    value |= (bit << i);
   }
-  return value;
+  return (uint32_t)value;
 }
 
-static int32_t sign_extend(uint32_t v, uint32_t bits) {
-  if (bits == 0 || bits >= 32) return (int32_t)v;
-  uint32_t m = 1u << (bits - 1);
-  uint32_t mask = (1u << bits) - 1u;
-  v &= mask;
-  return (int32_t)((v ^ m) - m);
+static int32_t sign_extend_u32(uint32_t v, uint32_t bits) {
+  if (bits == 0) return 0;
+  if (bits >= 32) return (int32_t)v;
+  const uint32_t sign_bit = 1u << (bits - 1u);
+  const uint32_t value_mask = (1u << bits) - 1u;
+  v &= value_mask;
+  return (int32_t)((v ^ sign_bit) - sign_bit);
 }
 
 static void normalize_element(InputElement *e) {
@@ -191,14 +196,15 @@ void input_elements_decode_report(InputElement *elements, size_t n,
     InputElement *e = &elements[i];
     if (uses_report_ids && e->report_id != report_id) continue;
     if (e->bit_size == 0) continue;
+    if (e->bit_size > 32) continue; // current runtime raw contract is int32_t
 
     // Bounds check (bit_offset is relative to payload)
     uint32_t last_bit = (uint32_t)e->bit_offset + (uint32_t)e->bit_size;
     uint32_t payload_bits = (uint32_t)payload_len * 8u;
     if (last_bit > payload_bits) continue;
 
-    uint32_t raw_u = extract_bits_le(payload, e->bit_offset, e->bit_size);
-    int32_t raw_s = e->is_signed ? sign_extend(raw_u, e->bit_size) : (int32_t)raw_u;
+    uint32_t raw_u = extract_bits_le_u32(payload, e->bit_offset, e->bit_size);
+    int32_t raw_s = e->is_signed ? sign_extend_u32(raw_u, e->bit_size) : (int32_t)raw_u;
 
     if (raw_s != e->raw) {
       e->raw = raw_s;

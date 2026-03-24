@@ -20,7 +20,7 @@ typedef struct {
   uint8_t dev_addr;
   uint8_t role;         // DeviceRole numeric value
   uint16_t num_elements;
-  uint16_t report_desc_len;  // cached report descriptor length (may be truncated)
+  uint16_t report_desc_len;  // cached report descriptor length
 } HidDeviceInfo;
 
 // Enumerate active devices into out_infos. Returns count written.
@@ -39,8 +39,12 @@ bool hid_device_manager_get_device_state(uint32_t device_id, struct GamepadState
 // Initialize the HID Host Driver and connection callbacks
 void hid_device_manager_init(void);
 
-// Get the latest merged state (thread-safe, lock-free or protected)
+// Get the latest merged state snapshot (thread-safe).
 void hid_device_manager_get_merged_state(struct GamepadState *out_state);
+
+// Wait for the next published merged state from the USB/HID pipeline.
+// Returns true if a state was received before timeout_ms elapsed.
+bool hid_device_manager_wait_for_next_state(struct GamepadState *out_state, uint32_t timeout_ms);
 
 // Recompute the merged state immediately using the current active MappingProfile.
 void hid_device_manager_recompute_mapping(void);

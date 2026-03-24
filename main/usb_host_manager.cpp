@@ -9,6 +9,14 @@
 static const char *TAG = "USB_HOST_MGR";
 static usb_phy_handle_t phy_hdl = nullptr;
 
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+static constexpr BaseType_t kUsbTaskCore = 1;
+#else
+static constexpr BaseType_t kUsbTaskCore = tskNO_AFFINITY;
+#endif
+
+static constexpr UBaseType_t kUsbDaemonTaskPriority = 3;
+
 static void usb_host_lib_daemon_task(void *arg) {
   bool has_clients = true;
   bool has_devices = true;
@@ -35,12 +43,11 @@ static void usb_host_lib_daemon_task(void *arg) {
 void usb_host_manager_init(void) {
   ESP_LOGI(TAG, "Initializing USB Host PHY...");
 
-  // Configure USB PHY interface for internal routing (Pins 19 and 20 usually)
   usb_phy_config_t phy_config = {
       .controller = USB_PHY_CTRL_OTG,
       .target = USB_PHY_TARGET_INT,
       .otg_mode = USB_OTG_MODE_HOST,
-      .otg_speed = USB_PHY_SPEED_UNDEFINED, // auto
+      .otg_speed = USB_PHY_SPEED_UNDEFINED,
       .ext_io_conf = nullptr,
       .otg_io_conf = nullptr,
   };
@@ -52,7 +59,7 @@ void usb_host_manager_init(void) {
 
   ESP_LOGI(TAG, "Initializing USB Host...");
   usb_host_config_t host_config = {};
-  host_config.skip_phy_setup = true; // We did it manually above
+  host_config.skip_phy_setup = true;
   host_config.intr_flags = ESP_INTR_FLAG_LEVEL1;
   err = usb_host_install(&host_config);
   if (err != ESP_OK) {
@@ -60,7 +67,7 @@ void usb_host_manager_init(void) {
     return;
   }
 
-  // Start daemon task
-  xTaskCreate(usb_host_lib_daemon_task, "usb_events", 4096, nullptr, 5, nullptr);
+  xTaskCreatePinnedToCore(usb_host_lib_daemon_task, "usb_events", 4096, nullptr,
+                          kUsbDaemonTaskPriority, nullptr, kUsbTaskCore);
   ESP_LOGI(TAG, "USB Host initialized and daemon started.");
 }
