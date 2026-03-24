@@ -80,10 +80,12 @@ struct MappingProfile {
 const char *axis_name(OutputAxis axis);
 
 // Parse / serialize the active in-memory profile.
-// Schema (current phase):
+// Schema emitted by mapping_engine_profile_to_json() and accepted by
+// mapping_engine_apply_profile_json():
 // {
-//   "version": 1,
+//   "version": 2,
 //   "buttons_or_combine": true,
+//   "replace_all": true,
 //   "axes": {
 //     "z": {
 //       "configured": true,
@@ -100,6 +102,16 @@ const char *axis_name(OutputAxis axis);
 //     }
 //   }
 // }
+//
+// Contract notes:
+//   - version is currently 2 on current main.
+//   - replace_all is an optional boolean accepted by the parser.
+//   - replace_all: true means "clear the existing active profile before applying
+//     the provided patch/object contents".
+//   - If replace_all is omitted or false, the parser applies the JSON as a patch
+//     onto the existing active in-memory profile.
+//   - mapping_engine_profile_to_json() emits the active normalized profile state;
+//     it does not emit replace_all.
 std::string mapping_engine_profile_to_json();
 bool mapping_engine_apply_profile_json(const char *json, size_t len, std::string *error_out);
 
