@@ -14,24 +14,25 @@
 // -----------------------------------------------------------------------------
 // Translation Layer
 // -----------------------------------------------------------------------------
-// This is the *one place* you should edit when you want to change how USB HID
-// inputs map to the outgoing BLE controller.
+// Current implementation note:
+//   - translate_usb_to_ble() is intentionally identity-only on current main.
+//   - The actual deterministic mapping from descriptor-derived HID inputs to the
+//     outgoing canonical GamepadState happens earlier in mapping_engine_compute(),
+//     reached through hid_device_manager_get_merged_state().
+//   - This function currently exists only as a final pass-through seam between
+//     the merged USB-side GamepadState and the BLE sender.
 //
-// USB side (Project A) produces a normalized GamepadState:
+// USB side produces a canonical GamepadState:
 //   -32767..32767 for axes/sliders
 //   hat: 0=center, 1=N,2=NE,...8=NW
 //   buttons: bit0=Button1 ... bit31=Button32
 //
-// BLE side (Project B style / HOGP) consumes the same logical layout, but you
-// may want to:
-//   * invert axes
-//   * swap axes
-//   * apply deadzones
-//   * remap sliders to different axes
+// BLE RUN mode currently consumes that same logical layout without further
+// remapping in this function.
 //
 // Keep this function fast and non-blocking.
 static void translate_usb_to_ble(const GamepadState *in, GamepadState *out) {
-  // Start with an identity mapping.
+  // Identity mapping only on current main.
   *out = *in;
 }
 

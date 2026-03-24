@@ -91,12 +91,15 @@ static uint8_t g_last_stream_sample_buf[kStreamSampleLen];
 // Small chunked notify framing (works even at MTU=23)
 // -----------------------------------------------------------------------------
 // EVT notifications are framed as:
-//   u8  version (1)
-//   u8  type    (1=json, 2=descriptor, 3=config)
+//   u8  version (currently 1)
+//   u8  type    (1=json, 2=descriptor)
 //   u16 msg_id
 //   u16 offset
 //   u16 total_len
 //   u8  payload[0..(MTU-3-8)]
+//
+// Current main does not emit a distinct type-3 config payload. Configuration
+// retrieval happens through the CFG characteristic and/or JSON command responses.
 static bool notify_evt_chunked(uint8_t type, const uint8_t *data, uint16_t total_len) {
   if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return false;
   if (!g_evt_notify_enabled) return false;
@@ -592,6 +595,13 @@ static const struct ble_gatt_svc_def *build_cfg_svcs_once() {
 // -----------------------------------------------------------------------------
 // STREAM payload (binary, <= 20 bytes at MTU=23)
 // -----------------------------------------------------------------------------
+// Packed 16-byte layout:
+//   byte  0 : u8   version
+//   byte  1 : u8   flags
+//   byte  2 : u32  device_id
+//   byte  6 : u32  element_id
+//   byte 10 : i32  raw
+//   byte 14 : i16  norm_q15
 struct __attribute__((packed)) StreamSample {
   uint8_t version;
   uint8_t flags;
