@@ -1,67 +1,109 @@
-# Architecture
+# ARCHITECTURE
 
 ## Purpose
-High-level system overview for **Gamepad Gateway / USB-to-BLE HOTAS Bridge**. This file is the entry point for the project knowledge base and links to the deeper firmware, webapp, interface, and CI/CD documents.
+Deterministic, high-level system overview for `gamepad-gateway-usb2ble`.
+
+This document is the top-level architecture map for future AI assistants and human maintainers. It describes the end-to-end runtime path from physical USB peripherals through the ESP32-S3 firmware to the browser-based configuration tools.
 
 Related documents:
-- [docs/README.md](docs/README.md)
-- [docs/architecture/SYSTEM_OVERVIEW.md](docs/architecture/SYSTEM_OVERVIEW.md)
 - [docs/interfaces/BLE_CONTRACTS.md](docs/interfaces/BLE_CONTRACTS.md)
-- [AUDIT_REPORT.md](AUDIT_REPORT.md)
 
 ## Dependencies
-- Firmware entrypoint: `main/main.cpp`
-- USB host stack: `main/usb_host_manager.cpp`, `main/hid_device_manager.cpp`
-- BLE RUN mode: `main/ble_gamepad.cpp`
-- BLE CONFIG mode: `main/ble_config_service.cpp`
-- Web config console: `webapp/index.html`, `webapp/app.js`
-- Web validation scene: `webapp/validation.html`, `webapp/validation.js`
-- GitHub Actions: `.github/workflows/ci.yml`, `.github/workflows/promote-artifacts.yml`
+### Firmware surfaces
+- `main/main.cpp`
+- `main/ble_config_service.h`
+- `main/mapping_engine.h`
+
+### WebApp surfaces
+- `webapp/shared/ble_client.js`
 
 ## Data Structures/Interfaces
-### Subsystems
-1. **USB intake**
-   - ESP32-S3 USB OTG host enumerates one or more HID devices through a powered hub.
-   - HID report descriptors are parsed into `InputElement[]` metadata.
-   - Input reports update per-device `GamepadState` and `InputElement` runtime values.
-2. **Deterministic mapping layer**
-   - `mapping::MappingProfile` maps `(device_id, element_id)` sources to canonical output axes.
-3. **BLE transport**
-   - **RUN mode** exposes a HID-over-GATT gamepad profile.
-   - **CONFIG mode** exposes a custom GATT service with `CMD`, `EVT`, `STREAM`, and `CFG` characteristics.
-4. **Web clients**
-   - Main config console: mapping, descriptor inspection, telemetry, profile import/export, flashing links.
-   - Validation scene: visualization-oriented config client with a separate implementation.
+### System roles
+#### Physical USB/HID layer
+- One or more USB HID peripherals are attached through a **powered USB hub**.
+- The ESP32-S3 operates as the **USB OTG host**.
+- HID report descriptors are parsed into firmware-side element metadata.
 
+#### Firmware layer
+- Enumerates USB HID devices.
+- Builds a canonical `GamepadState` from parsed HID inputs.
+- Applies deterministic mapping logic via `mapping_engine_compute()`.
+- Exposes one of two BLE modes:
+  - **RUN mode**: BLE HID gamepad output.
+  - **CONFIG mode**: custom GATT configuration service.
+
+#### WebApp layer
+- Connects over Web Bluetooth to the **CONFIG** service.
+- Uses a shared BLE client implementation in `webapp/shared/ble_client.js`.
+- Provides two browser experiences:
+  - **Configuration console**
+  - **Validation scene**
+
+### End-to-end pipeline
 ```mermaid
-sequenceDiagram
-  participant USB as USB HID devices
-  participant ESP as ESP32-S3 firmware
-  participant MAP as Mapping engine
-  participant BLE as BLE stack
-  participant WEB as Web app
-
-  USB->>ESP: Enumerate via USB OTG host
-  ESP->>ESP: Parse HID report descriptors
-  USB->>ESP: Input reports
-  ESP->>MAP: Update InputElement + per-device state
-  MAP->>ESP: Deterministic GamepadState
-  alt RUN mode
-    ESP->>BLE: 21-byte HID input report
-  else CONFIG mode
-    WEB->>BLE: CMD writes (JSON)
-    BLE->>ESP: Command dispatch
-    ESP->>BLE: EVT JSON / descriptor chunks
-    ESP->>BLE: STREAM binary samples
-    WEB->>BLE: CFG read/write for config blob
-  end
+flowchart LR
+  A[USB flight peripherals\nHOTAS / throttle / pedals] --> B[Powered USB hub]
+  B --> C[ESP32-S3 USB OTG Host]
+  C --> D[HID descriptor parsing\nInputElement metadata]
+  D --> E[Per-device runtime state\nraw + normalized values]
+  E --> F[mapping_engine_compute\nDeterministic GamepadState]
+  F --> G{Boot mode}
+  G -->|RUN| H[BLE HID gamepad services]
+  G -->|CONFIG| I[Custom BLE GATT config service\nCMD / EVT / STREAM / CFG]
+  I --> J[WebApp shared BleClient]
+  J --> K[Config console]
+  J --> L[Validation scene]
 ```
 
+### Runtime mode split
+#### RUN mode
+- Firmware initializes BLE HID services.
+- Firmware serializes the canonical `GamepadState` into the BLE HID input report.
+- Browser tooling is not the primary consumer in this mode.
+
+#### CONFIG mode
+- Firmware initializes the custom config service.
+- The web client connects to:
+  - `CMD`
+  - `EVT`
+  - `STREAM`
+  - `CFG`
+- Configuration, descriptor inspection, telemetry, and validation happen in-browser.
+
+### Responsibility split
+#### Firmware responsibility
+- USB host management.
+- HID descriptor parsing.
+- Per-device runtime state management.
+- Deterministic mapping to canonical outputs.
+- BLE service hosting.
+- Binary + JSON contract production.
+
+#### WebApp responsibility
+- BLE transport orchestration over Web Bluetooth.
+- Command queueing and timeout control.
+- EVT chunk reassembly.
+- STREAM binary payload parsing.
+- CFG-first configuration retrieval with inline fallback.
+- UI rendering for config and validation workflows.
+
 ## Expected State Changes
-- Boot reads persisted app mode from NVS.
-- CONFIG mode exposes the custom service and suppresses HID output.
-- RUN mode advertises HID/BAS/DIS services and emits HID input reports.
+### Boot
+- `app_mode_init()` selects `RUN` or `CONFIG`.
+
+### CONFIG mode
+- BLE custom service is active.
+- WebApp may connect and subscribe to notifications.
+- Firmware emits:
+  - EVT framed payloads
+  - STREAM 16-byte samples
+  - CFG JSON reads/writes
+
+### RUN mode
+- BLE HID path is active.
+- Firmware emits host-facing HID gamepad state.
 
 ## Known Limitations
-- The main config console and validation scene do **not** currently implement the exact same client contract. See [AUDIT_REPORT.md](AUDIT_REPORT.md).
-- Some comments and headers have drifted from implementation, especially around config transport and schema versioning.
+- The firmware-to-web contract is split across binary STREAM packets, JSON EVT responses, and CFG characteristic reads/writes.
+- `translate_usb_to_ble()` in `main/main.cpp` is identity-only; real mapping occurs earlier in `mapping_engine_compute()`.
+- Future changes to payload structure must update [docs/interfaces/BLE_CONTRACTS.md](docs/interfaces/BLE_CONTRACTS.md) first.
